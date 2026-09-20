@@ -36,24 +36,47 @@
           <span id="reader-date"></span>
           <span id="reader-count" class="dim"></span>
         </header>
+
+        <div id="reader-tags" class="tag-row"></div>
+        <input
+          id="tag-input"
+          class="tag-input"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="tags, comma separated"
+          hidden
+        />
+
         <div id="reader-body"></div>
+
+        <section id="reader-related" class="related" hidden>
+          <h2 class="section-label">Related</h2>
+          <ul id="related-list"></ul>
+        </section>
+
+        <footer class="reader-foot hint">
+          <span>t tags</span><span>l link</span><span>↑↓ related</span>
+          <span>⏎ open</span><span>x unlink</span><span>esc back</span>
+        </footer>
       </article>
     </section>
 
     <!-- keyboard-driven entry list -->
     <section id="picker" class="veil" hidden>
       <div class="picker-inner">
+        <div id="picker-head" class="picker-head hint" hidden></div>
         <input
           id="picker-filter"
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="Filter entries…"
+          placeholder="Filter entries…  (#tag to match tags)"
         />
         <ul id="picker-list"></ul>
         <footer class="picker-foot hint">
-          <span>↑↓ move</span><span>⏎ open</span><span>esc close</span>
-          <span>⌘⇧O change folder</span>
+          <span>↑↓ move</span><span>⏎ open</span><span>⌘T sort</span>
+          <span id="sort-label"></span><span>esc close</span>
         </footer>
       </div>
     </section>

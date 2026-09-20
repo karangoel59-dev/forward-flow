@@ -274,3 +274,128 @@ body {
   opacity: 1;
   transition: opacity 90ms ease-out;
 }
+
+/* ----------------------------------------------------- phase 2: viewer */
+
+.section-label {
+  font-size: 0.72rem;
+  font-weight: normal;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 0.75rem;
+}
+
+/* tags */
+
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-bottom: 1.75rem;
+  margin-top: -1.25rem;
+}
+
+.tag-row:empty {
+  display: none;
+}
+
+.tag {
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  padding: 0.12rem 0.6rem;
+}
+
+.tag-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--accent);
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 0 0 0.4rem;
+  margin: -1.25rem 0 1.75rem;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.tag-input[hidden] {
+  display: none;
+}
+
+.tag-input::placeholder {
+  color: var(--dim);
+  opacity: 0.5;
+}
+
+/* related */
+
+.related {
+  border-top: 1px solid color-mix(in srgb, var(--dim) 35%, transparent);
+  padding-top: 1.75rem;
+  margin-top: 1rem;
+}
+
+.related[hidden] {
+  display: none;
+}
+
+.related ul {
+  list-style: none;
+}
+
+.related li {
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+.related li.on {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+#reader-body {
+  padding-bottom: 2.5rem;
+}
+
+.reader-foot {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 2.5rem 0 20vh;
+}
+
+/* picker additions */
+
+.picker-head {
+  padding-bottom: 0.75rem;
+  color: var(--accent);
+}
+
+.picker-head[hidden] {
+  display: none;
+}
+
+.row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+
+.row-tag {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.row-link-count {
+  color: var(--dim);
+}

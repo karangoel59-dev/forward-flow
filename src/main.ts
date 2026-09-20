@@ -9,23 +9,41 @@ type EntryMeta = {
   words: number;
   preview: string;
   tags: string[];
+  links: string[];
 };
 
-type EntryFull = { meta: EntryMeta; body: string };
+type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
 type Mode = "setup" | "write" | "reader" | "picker";
+type Sort = "new" | "old" | "long" | "linked";
+
+const SORTS: Sort[] = ["new", "old", "long", "linked"];
+const SORT_LABEL: Record<Sort, string> = {
+  new: "newest first",
+  old: "oldest first",
+  long: "longest first",
+  linked: "most linked",
+};
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const setup = el<HTMLElement>("setup");
 const writeView = el<HTMLElement>("write");
 const editor = el<HTMLTextAreaElement>("editor");
+
 const reader = el<HTMLElement>("reader");
 const readerDate = el<HTMLElement>("reader-date");
 const readerCount = el<HTMLElement>("reader-count");
 const readerBody = el<HTMLElement>("reader-body");
+const readerTags = el<HTMLElement>("reader-tags");
+const tagInput = el<HTMLInputElement>("tag-input");
+const relatedBox = el<HTMLElement>("reader-related");
+const relatedList = el<HTMLUListElement>("related-list");
+
 const picker = el<HTMLElement>("picker");
+const pickerHead = el<HTMLElement>("picker-head");
 const pickerFilter = el<HTMLInputElement>("picker-filter");
 const pickerList = el<HTMLUListElement>("picker-list");
+const sortLabel = el<HTMLElement>("sort-label");
 const hudEl = el<HTMLElement>("hud");
 
 const win = getCurrentWindow();
@@ -34,7 +52,13 @@ let mode: Mode = "write";
 let entries: EntryMeta[] = [];
 let shown: EntryMeta[] = [];
 let cursor = 0;
-let readerCameFromPicker = false;
+let sort: Sort = "new";
+
+let current: EntryFull | null = null;
+let relCursor = 0;
+let tagEditing = false;
+let readerOrigin: Mode = "write";
+let linkFor: string | null = null;
 let committing = false;
 
 // ---------------------------------------------------------------- hud
@@ -116,6 +140,12 @@ function show(next: Mode) {
   }
 }
 
+function formatDate(raw: string) {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
+}
+
 // ---------------------------------------------------------------- commit
 
 async function commit() {
@@ -145,19 +175,62 @@ async function commit() {
 
 // ---------------------------------------------------------------- reader
 
-function formatDate(raw: string) {
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return raw;
-  return d.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
+function renderTags() {
+  readerTags.replaceChildren();
+  if (!current) return;
+  for (const tag of current.meta.tags) {
+    const chip = document.createElement("span");
+    chip.className = "tag";
+    chip.textContent = tag;
+    readerTags.append(chip);
+  }
 }
 
-async function openEntry(path: string) {
-  readerCameFromPicker = mode === "picker";
+function renderRelated() {
+  relatedList.replaceChildren();
+  const items = current?.related ?? [];
+  relatedBox.hidden = items.length === 0;
+  if (!items.length) return;
+
+  if (relCursor >= items.length) relCursor = items.length - 1;
+  if (relCursor < 0) relCursor = 0;
+
+  items.forEach((entry, i) => {
+    const li = document.createElement("li");
+    if (i === relCursor) li.className = "on";
+
+    const top = document.createElement("div");
+    top.className = "row-top";
+    const when = document.createElement("span");
+    when.textContent = formatDate(entry.created);
+    const count = document.createElement("span");
+    count.textContent = `${entry.words}w`;
+    top.append(when, count);
+
+    const preview = document.createElement("div");
+    preview.className = "row-preview";
+    preview.textContent = entry.preview || "—";
+
+    li.append(top, preview);
+    li.addEventListener("click", () => openEntry(entry.path));
+    relatedList.append(li);
+  });
+}
+
+async function openEntry(path: string, remember = true) {
+  if (remember && mode === "picker") readerOrigin = "picker";
+  else if (remember && mode === "write") readerOrigin = "write";
   try {
     const full = await invoke<EntryFull>("read_entry", { path });
+    current = full;
+    relCursor = 0;
+    tagEditing = false;
+    tagInput.hidden = true;
     readerDate.textContent = formatDate(full.meta.created);
     readerCount.textContent = `${full.meta.words} words`;
     readerBody.textContent = full.body.trim();
+    renderTags();
+    renderRelated();
     reader.querySelector<HTMLElement>(".reader-inner")!.scrollTop = 0;
     show("reader");
   } catch (e) {
@@ -165,15 +238,116 @@ async function openEntry(path: string) {
   }
 }
 
+// ---------------------------------------------------------------- tagging
+
+function beginTagEdit() {
+  if (!current) return;
+  tagInput.value = current.meta.tags.join(", ");
+  tagInput.hidden = false;
+  tagEditing = true;
+  tagInput.focus();
+  tagInput.select();
+}
+
+function endTagEdit() {
+  tagEditing = false;
+  tagInput.hidden = true;
+  tagInput.blur();
+}
+
+async function saveTags() {
+  if (!current) return;
+  const tags = tagInput.value
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const path = current.meta.path;
+  try {
+    await invoke<EntryMeta>("set_tags", { path, tags });
+    endTagEdit();
+    await openEntry(path, false);
+    hud(tags.length ? "tags saved" : "tags cleared");
+  } catch (e) {
+    hud(String(e));
+  }
+}
+
+// ---------------------------------------------------------------- linking
+
+async function beginLink() {
+  if (!current) return;
+  linkFor = current.meta.path;
+  await openPicker();
+}
+
+async function chooseInPicker(entry: EntryMeta) {
+  if (!linkFor) {
+    openEntry(entry.path);
+    return;
+  }
+  const from = linkFor;
+  linkFor = null;
+  try {
+    await invoke("link_entries", { a: from, b: entry.path });
+    hud("linked");
+  } catch (e) {
+    hud(String(e));
+  }
+  await openEntry(from, false);
+}
+
+async function unlinkSelected() {
+  if (!current) return;
+  const target = current.related[relCursor];
+  if (!target) return;
+  const path = current.meta.path;
+  try {
+    await invoke("unlink_entries", { a: path, b: target.path });
+    await openEntry(path, false);
+    hud("unlinked");
+  } catch (e) {
+    hud(String(e));
+  }
+}
+
 // ---------------------------------------------------------------- picker
 
+function sortEntries(list: EntryMeta[]): EntryMeta[] {
+  const out = list.slice();
+  switch (sort) {
+    case "new":
+      return out.sort((a, b) => b.name.localeCompare(a.name));
+    case "old":
+      return out.sort((a, b) => a.name.localeCompare(b.name));
+    case "long":
+      return out.sort((a, b) => b.words - a.words);
+    case "linked":
+      return out.sort(
+        (a, b) => b.links.length - a.links.length || b.name.localeCompare(a.name),
+      );
+  }
+}
+
 function renderPicker() {
-  const q = pickerFilter.value.trim().toLowerCase();
-  shown = q
-    ? entries.filter((e) =>
-        `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(q),
-      )
-    : entries.slice();
+  const raw = pickerFilter.value.trim().toLowerCase();
+  let pool = entries;
+
+  // In link mode you cannot link an entry to itself.
+  if (linkFor) pool = pool.filter((e) => e.path !== linkFor);
+
+  if (raw.startsWith("#")) {
+    const want = raw.slice(1);
+    pool = want
+      ? pool.filter((e) => e.tags.some((t) => t.includes(want)))
+      : pool.filter((e) => e.tags.length > 0);
+  } else if (raw) {
+    pool = pool.filter((e) =>
+      `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(raw),
+    );
+  }
+
+  shown = sortEntries(pool);
+  sortLabel.textContent = SORT_LABEL[sort];
 
   if (cursor >= shown.length) cursor = Math.max(0, shown.length - 1);
   pickerList.replaceChildren();
@@ -195,15 +369,30 @@ function renderPicker() {
     const when = document.createElement("span");
     when.textContent = formatDate(entry.created);
     const count = document.createElement("span");
-    count.textContent = `${entry.words}w`;
+    count.textContent = entry.links.length
+      ? `${entry.words}w · ${entry.links.length} linked`
+      : `${entry.words}w`;
+    if (entry.links.length) count.className = "row-link-count";
     top.append(when, count);
 
     const preview = document.createElement("div");
     preview.className = "row-preview";
     preview.textContent = entry.preview || "—";
-
     li.append(top, preview);
-    li.addEventListener("click", () => openEntry(entry.path));
+
+    if (entry.tags.length) {
+      const tags = document.createElement("div");
+      tags.className = "row-tags";
+      for (const tag of entry.tags) {
+        const t = document.createElement("span");
+        t.className = "row-tag";
+        t.textContent = `#${tag}`;
+        tags.append(t);
+      }
+      li.append(tags);
+    }
+
+    li.addEventListener("click", () => chooseInPicker(entry));
     pickerList.append(li);
   });
 
@@ -217,6 +406,8 @@ async function openPicker() {
     hud(String(e));
     return;
   }
+  pickerHead.hidden = !linkFor;
+  pickerHead.textContent = linkFor ? "Link to which entry?" : "";
   pickerFilter.value = "";
   cursor = 0;
   renderPicker();
@@ -227,6 +418,13 @@ function movePicker(delta: number) {
   if (!shown.length) return;
   cursor = Math.min(shown.length - 1, Math.max(0, cursor + delta));
   renderPicker();
+}
+
+function cycleSort() {
+  sort = SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length];
+  cursor = 0;
+  renderPicker();
+  hud(SORT_LABEL[sort]);
 }
 
 // ---------------------------------------------------------------- vault
@@ -258,8 +456,21 @@ async function toggleFullscreen() {
   }
 }
 
+tagInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveTags();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    endTagEdit();
+  }
+  e.stopPropagation();
+});
+
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
+  const typing =
+    e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
   if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "f") {
     e.preventDefault();
@@ -277,7 +488,13 @@ document.addEventListener("keydown", (e) => {
 
   if (mod && e.key.toLowerCase() === "o") {
     e.preventDefault();
-    mode === "picker" ? show("write") : openPicker();
+    if (mode === "picker") {
+      linkFor = null;
+      show("write");
+    } else {
+      linkFor = null;
+      openPicker();
+    }
     return;
   }
 
@@ -289,18 +506,60 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (e.key === "Escape") {
-    e.preventDefault();
-    if (mode === "reader" && readerCameFromPicker) {
-      openPicker();
-    } else {
-      show("write");
+  // ------------------------------------------------------------ reader
+  if (mode === "reader") {
+    if (tagEditing) return;
+
+    if (e.key === "Escape") {
+      e.preventDefault();
+      readerOrigin === "picker" ? openPicker() : show("write");
+      return;
+    }
+    if (typing) return;
+
+    const key = e.key.toLowerCase();
+    if (key === "t") {
+      e.preventDefault();
+      beginTagEdit();
+    } else if (key === "l") {
+      e.preventDefault();
+      beginLink();
+    } else if (key === "x") {
+      e.preventDefault();
+      unlinkSelected();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      relCursor += 1;
+      renderRelated();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      relCursor -= 1;
+      renderRelated();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const target = current?.related[relCursor];
+      if (target) openEntry(target.path);
     }
     return;
   }
 
+  // ------------------------------------------------------------ picker
   if (mode === "picker") {
-    if (e.key === "ArrowDown" || (mod && e.key.toLowerCase() === "j")) {
+    if (mod && e.key.toLowerCase() === "t") {
+      e.preventDefault();
+      cycleSort();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (linkFor) {
+        const back = linkFor;
+        linkFor = null;
+        openEntry(back, false);
+      } else {
+        show("write");
+      }
+    } else if (e.key === "ArrowDown" || (mod && e.key.toLowerCase() === "j")) {
       e.preventDefault();
       movePicker(1);
     } else if (e.key === "ArrowUp" || (mod && e.key.toLowerCase() === "k")) {
@@ -309,7 +568,7 @@ document.addEventListener("keydown", (e) => {
     } else if (e.key === "Enter") {
       e.preventDefault();
       const target = shown[cursor];
-      if (target) openEntry(target.path);
+      if (target) chooseInPicker(target);
     }
   }
 });
