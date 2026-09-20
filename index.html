@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Forward Flow</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <!-- first run: pick a vault folder -->
+    <section id="setup" class="veil" hidden>
+      <div class="setup-inner">
+        <p class="setup-line">Where should your entries live?</p>
+        <button id="setup-pick" class="ghost-btn">Choose a folder</button>
+        <p class="hint">Plain markdown files. One per entry. Yours to move or back up.</p>
+      </div>
+    </section>
+
+    <!-- the writing surface -->
+    <main id="write">
+      <textarea
+        id="editor"
+        spellcheck="false"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        placeholder="Begin."
+      ></textarea>
+    </main>
+
+    <!-- read-only view of a committed entry -->
+    <section id="reader" class="veil" hidden>
+      <article class="reader-inner">
+        <header class="reader-head">
+          <span id="reader-date"></span>
+          <span id="reader-count" class="dim"></span>
+        </header>
+        <div id="reader-body"></div>
+      </article>
+    </section>
+
+    <!-- keyboard-driven entry list -->
+    <section id="picker" class="veil" hidden>
+      <div class="picker-inner">
+        <input
+          id="picker-filter"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Filter entries…"
+        />
+        <ul id="picker-list"></ul>
+        <footer class="picker-foot hint">
+          <span>↑↓ move</span><span>⏎ open</span><span>esc close</span>
+          <span>⌘⇧O change folder</span>
+        </footer>
+      </div>
+    </section>
+
+    <div id="hud" class="hint"></div>
+  </body>
+</html>

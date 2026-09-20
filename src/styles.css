@@ -1,0 +1,276 @@
+:root {
+  --paper: #12110f;
+  --ink: #e9e4d9;
+  --dim: #6d675d;
+  --accent: #c8a46a;
+  --serif: ui-serif, "New York", "Iowan Old Style", Palatino, Georgia, serif;
+  --measure: 34rem;
+  --gutter: 7vh;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --paper: #faf7f0;
+    --ink: #1d1b17;
+    --dim: #9a9285;
+    --accent: #8a6a2f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  -webkit-font-smoothing: antialiased;
+  caret-color: var(--accent);
+}
+
+/* nothing is selectable by default; the reader opts back in */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+.dim,
+.hint {
+  color: var(--dim);
+}
+
+.hint {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+/* ----------------------------------------------------------- writing */
+
+#write {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  padding: var(--gutter) 1.5rem;
+}
+
+#editor {
+  width: 100%;
+  max-width: var(--measure);
+  height: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 2rem; /* JS overrides: autosizes to fit */
+  line-height: 1.55;
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+  transition: font-size 90ms ease-out;
+}
+
+#editor::placeholder {
+  color: var(--dim);
+  opacity: 0.55;
+}
+
+/* committed: brief dissolve before the page clears */
+#editor.committing {
+  opacity: 0;
+  transition: opacity 260ms ease-in;
+}
+
+/* ----------------------------------------------------------- overlays */
+
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--paper);
+  display: flex;
+  justify-content: center;
+  padding: var(--gutter) 1.5rem;
+  animation: rise 140ms ease-out;
+}
+
+.veil[hidden] {
+  display: none;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* setup */
+
+.setup-inner {
+  margin: auto;
+  text-align: center;
+  display: grid;
+  gap: 1.25rem;
+  justify-items: center;
+}
+
+.setup-line {
+  font-size: 1.6rem;
+}
+
+.ghost-btn {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--dim);
+  border-radius: 2px;
+  padding: 0.5rem 1.4rem;
+  cursor: pointer;
+}
+
+.ghost-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* reader */
+
+.reader-inner {
+  width: 100%;
+  max-width: var(--measure);
+  overflow-y: auto;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.reader-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding-bottom: 2.5rem;
+}
+
+#reader-body {
+  font-size: 1.28rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-bottom: 30vh;
+}
+
+/* picker */
+
+.picker-inner {
+  width: 100%;
+  max-width: 40rem;
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#picker-filter {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--dim);
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 1.5rem;
+  padding-bottom: 0.6rem;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#picker-filter::placeholder {
+  color: var(--dim);
+  opacity: 0.5;
+}
+
+#picker-list {
+  list-style: none;
+  overflow-y: auto;
+  margin-top: 1.25rem;
+  min-height: 0;
+}
+
+#picker-list li {
+  padding: 0.6rem 0.75rem;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+
+#picker-list li.on {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.row-preview {
+  font-size: 1rem;
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty {
+  color: var(--dim);
+  padding: 1.5rem 0.75rem;
+}
+
+.picker-foot {
+  display: flex;
+  gap: 1.5rem;
+  padding-top: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ----------------------------------------------------------- hud */
+
+#hud {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 0;
+  right: 0;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 500ms ease-out;
+  z-index: 20;
+}
+
+#hud.show {
+  opacity: 1;
+  transition: opacity 90ms ease-out;
+}
