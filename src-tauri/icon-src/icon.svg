@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#211f1b"/>
+      <stop offset="1" stop-color="#0d0c0a"/>
+    </linearGradient>
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="270" y1="0" x2="558" y2="0">
+      <stop offset="0" stop-color="#b8935a"/>
+      <stop offset="1" stop-color="#e2c48a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.72" cy="0.68" r="0.5">
+      <stop offset="0" stop-color="#c8a46a" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#c8a46a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS squircle: 824px body centred in 1024 canvas -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="url(#rim)" stroke-width="6"/>
+  <!-- committed lines: locked, receding into the past -->
+  <g stroke-linecap="round" stroke="#e9e4d9" stroke-width="44">
+    <line x1="270" y1="332" x2="700" y2="332" opacity="0.16"/>
+    <line x1="270" y1="447" x2="754" y2="447" opacity="0.26"/>
+    <line x1="270" y1="562" x2="618" y2="562" opacity="0.40"/>
+  </g>
+  <!-- the live line: gold, still moving forward -->
+  <line x1="270" y1="677" x2="558" y2="677" stroke="url(#gold)" stroke-width="44" stroke-linecap="round"/>
+  <!-- caret -->
+  <rect x="598" y="626" width="30" height="102" rx="15" fill="#e2c48a"/>
+</svg>
