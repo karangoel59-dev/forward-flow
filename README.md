@@ -77,6 +77,49 @@ missing, the other side still surfaces it, so a partial write self-heals.
 Frontmatter keys this app does not recognise are preserved untouched, so you
 can add your own fields by hand.
 
+## Backup and sync
+
+The entries folder is a git repository, and the app looks after it. Choosing a folder runs
+`git init` for you (and commits what is already there). After that, every change is committed and
+pushed in the background:
+
+| You do | Commit |
+| --- | --- |
+| Commit an entry | `Add entry 2026-09-21-143012` |
+| Edit tags | `Tag 2026-09-21-143012` |
+| Link or unlink two entries | `Link … and …` / `Unlink … and …` |
+| Choose a folder, or launch the app | `Start Forward Flow vault` / `Sync vault` |
+
+Saving never waits on git. The entry is written to disk first; committing and pushing happen on
+another thread, so a slow network or a missing git cannot delay or lose a save. The hint line at
+the bottom tells you how it went: `synced`, `offline · will sync on the next save`, or
+`sync failed · <reason>`.
+
+**Pushing needs a remote.** The app pushes to the folder's `origin`. Create an empty repository
+somewhere (a private one, since these are your own writing) and connect it once:
+
+```sh
+cd ~/Documents/fflow
+git remote add origin git@github.com:you/fflow.git
+```
+
+Without a remote the entries are still committed locally, and the app stays quiet about it.
+
+Details worth knowing:
+
+- Pushes that fail (offline, wrong key) are retried on the next save and on launch. Nothing is
+  lost meanwhile: the commits are local and intact.
+- If the remote has entries this machine lacks, they are rebased in before pushing. Entries are
+  timestamped files, so this almost never conflicts.
+- Rapid saves are merged into one push. A commit stages the whole folder, so anything edited
+  outside the app is picked up too.
+- Git runs without prompts: no passphrase, hook or signing dialogs. Use an SSH key without a
+  passphrase (or one in your keychain) so pushes can run unattended.
+- The app finds git at `/opt/homebrew/bin`, `/usr/local/bin` or `/usr/bin`. If none has it, saving
+  works as before and the hint line says git is not available.
+- Every version of every entry now lives in the repository's history, in addition to the
+  append-only rule the editor enforces.
+
 ## What "append-only" means here
 
 Immutability kicks in at commit, not at the keystroke. While drafting you can

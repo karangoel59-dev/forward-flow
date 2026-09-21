@@ -4,6 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
+mod vault_git;
+
 // ---------------------------------------------------------------- config
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -237,9 +239,11 @@ fn get_vault(app: AppHandle) -> Option<String> {
 #[tauri::command]
 fn set_vault(app: AppHandle, path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let cfg = Config { vault: Some(path) };
+    let cfg = Config { vault: Some(path.clone()) };
     let body = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(config_path(&app)?, body).map_err(|e| e.to_string())
+    fs::write(config_path(&app)?, body).map_err(|e| e.to_string())?;
+    vault_git::record(&app, PathBuf::from(path), "Start Forward Flow vault".into(), true);
+    Ok(())
 }
 
 #[tauri::command]
@@ -293,6 +297,8 @@ fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
     );
     fs::write(&path, &raw).map_err(|e| e.to_string())?;
     let _ = fs::remove_file(draft_path(&app)?);
+    // The entry is on disk; backing it up happens in the background and cannot fail the save.
+    vault_git::record(&app, dir, format!("Add entry {}", stem_of(&path)), true);
     Ok(meta_from(&path, &raw))
 }
 
@@ -300,7 +306,9 @@ fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
 fn set_tags(app: AppHandle, path: String, tags: Vec<String>) -> Result<EntryMeta, String> {
     let target = entry_in_vault(&app, &path)?;
     let cleaned = dedupe(tags.iter().map(|t| clean_tag(t)).collect());
-    rewrite_meta(&target, Some(cleaned), None)
+    let meta = rewrite_meta(&target, Some(cleaned), None)?;
+    vault_git::record(&app, vault_dir(&app)?, format!("Tag {}", meta.name), true);
+    Ok(meta)
 }
 
 fn stem_of(path: &PathBuf) -> String {
@@ -341,6 +349,12 @@ fn link_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
 
     add_link(&pa, &stem_of(&pb))?;
     add_link(&pb, &stem_of(&pa))?;
+    vault_git::record(
+        &app,
+        vault_dir(&app)?,
+        format!("Link {} and {}", stem_of(&pa), stem_of(&pb)),
+        true,
+    );
     Ok(())
 }
 
@@ -351,6 +365,12 @@ fn unlink_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
 
     remove_link(&pa, &stem_of(&pb))?;
     remove_link(&pb, &stem_of(&pa))?;
+    vault_git::record(
+        &app,
+        vault_dir(&app)?,
+        format!("Unlink {} and {}", stem_of(&pa), stem_of(&pb)),
+        true,
+    );
     Ok(())
 }
 
@@ -396,6 +416,14 @@ fn load_draft(app: AppHandle) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // Anything written outside the app, or a push that failed last time, goes out now.
+            // Only problems are reported: a quiet launch should stay quiet.
+            if let Ok(vault) = vault_dir(app.handle()) {
+                vault_git::record(app.handle(), vault, "Sync vault".into(), false);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_vault,
             set_vault,

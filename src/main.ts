@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -145,6 +146,21 @@ function formatDate(raw: string) {
   if (Number.isNaN(d.getTime())) return raw;
   return d.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
 }
+
+// ---------------------------------------------------------------- sync
+
+// The backend commits and pushes every save in the background and reports how it went. A save
+// never waits on this: the entry is already on disk, and a failed push is retried next time.
+type SyncStatus = { state: "synced" | "offline" | "error"; detail: string };
+
+listen<SyncStatus>("sync-status", (event) => {
+  const { state, detail } = event.payload;
+  if (state === "synced") hud("synced");
+  else if (state === "offline") hud("offline · will sync on the next save", 3600);
+  else hud(`sync failed · ${detail.slice(0, 90)}`, 6000);
+}).catch(() => {
+  /* not running inside the app shell; nothing to report */
+});
 
 // ---------------------------------------------------------------- commit
 
