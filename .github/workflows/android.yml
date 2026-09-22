@@ -79,6 +79,16 @@ jobs:
           base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > "$RUNNER_TEMP/release.p12"
           echo "storeFile=$RUNNER_TEMP/release.p12" >> keystore.properties
 
+      # TEMPORARY: last release APK came out "-unsigned" despite the step above, so dump how the
+      # generated Gradle project actually wires (or doesn't wire) signing before spending another
+      # full build on it.
+      - name: Debug signing config
+        run: |
+          echo "--- keystore.properties ---"
+          cat src-tauri/gen/android/keystore.properties
+          echo "--- app/build.gradle.kts (signing/keystore lines) ---"
+          grep -n -i "keystore\|signing\|password\|keyAlias" src-tauri/gen/android/app/build.gradle.kts || echo "(no matches)"
+
       # The symlinks above cover most tools that shell out to the old prefixed names, but vendored
       # OpenSSL's Configure hardcodes an unqualified "<triple>-ranlib" into its Makefile without
       # prepending the NDK's bin dir, so it depends on PATH resolution order at the moment make
