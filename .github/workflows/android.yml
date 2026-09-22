@@ -113,7 +113,7 @@ jobs:
                   storePassword = keystoreProperties["password"] as String
               }
           }
-      '''
+          '''
           with_signing_configs = text.replace("android {\n", "android {\n" + signing_block, 1)
           assert with_signing_configs != text, "anchor 'android {' not found — template changed upstream"
 
