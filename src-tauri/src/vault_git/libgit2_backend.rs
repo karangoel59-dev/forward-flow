@@ -202,8 +202,11 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     let result = remote.push(&[refspec.as_str()], Some(&mut opts));
 
+    // `opts` (and the closure it owns, still borrowing `rejected`) lives until the end of this
+    // scope, so `rejected` can't be moved out of here yet — clone its contents through the
+    // borrow instead.
     match result {
-        Ok(()) => match rejected.into_inner() {
+        Ok(()) => match rejected.borrow().clone() {
             Some(_) => Attempt::Rejected,
             None => Attempt::Synced,
         },
