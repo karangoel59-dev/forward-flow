@@ -231,17 +231,41 @@ fn rewrite_meta(
 
 // ---------------------------------------------------------------- commands
 
+fn write_config(app: &AppHandle, cfg: &Config) -> Result<(), String> {
+    let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(config_path(app)?, body).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_vault(app: AppHandle) -> Option<String> {
-    read_config(&app).vault
+    if let Some(v) = read_config(&app).vault {
+        return Some(v);
+    }
+
+    // tauri-plugin-dialog has no folder picker on mobile — its own source rejects a
+    // directory-mode `open()` outright (`Err(FolderPickerNotImplemented)`, by design in that
+    // crate, not a bug here). Rather than strand Android on the desktop setup screen waiting
+    // for a picker that will never appear, default straight to the app's own private storage;
+    // git sync to a remote (vault_git) is how entries leave an Android device, not picking a
+    // shared folder.
+    #[cfg(target_os = "android")]
+    {
+        let dir = app.path().app_data_dir().ok()?.join("vault");
+        fs::create_dir_all(&dir).ok()?;
+        let path = dir.to_string_lossy().to_string();
+        write_config(&app, &Config { vault: Some(path.clone()) }).ok()?;
+        vault_git::record(&app, dir, "Start Forward Flow vault".into(), true);
+        return Some(path);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    None
 }
 
 #[tauri::command]
 fn set_vault(app: AppHandle, path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let cfg = Config { vault: Some(path.clone()) };
-    let body = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    fs::write(config_path(&app)?, body).map_err(|e| e.to_string())?;
+    write_config(&app, &Config { vault: Some(path.clone()) })?;
     vault_git::record(&app, PathBuf::from(path), "Start Forward Flow vault".into(), true);
     Ok(())
 }

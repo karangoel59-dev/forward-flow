@@ -446,18 +446,22 @@ function cycleSort() {
 // ---------------------------------------------------------------- vault
 
 async function chooseVault() {
-  const picked = await open({
-    directory: true,
-    multiple: false,
-    title: "Choose a folder for your entries",
-  });
-  if (typeof picked !== "string") return;
   try {
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose a folder for your entries",
+    });
+    if (typeof picked !== "string") return;
     await invoke("set_vault", { path: picked });
     entries = [];
     hud("folder set");
     show("write");
   } catch (e) {
+    // Notably hit on Android: tauri-plugin-dialog has no folder picker on mobile, so `open()`
+    // itself rejects there. `boot()` doesn't call this on Android — it provisions a vault in
+    // app storage on its own — but keep this caught rather than silently doing nothing, in
+    // case the setup screen is ever reachable there some other way.
     hud(String(e));
   }
 }
