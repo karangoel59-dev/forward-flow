@@ -149,6 +149,46 @@ body {
   color: var(--accent);
 }
 
+/* remote */
+
+.remote-inner {
+  width: 100%;
+  max-width: 30rem;
+}
+
+#remote-current {
+  margin-top: -0.5rem;
+}
+
+#remote-url {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--dim);
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 1rem;
+  text-align: center;
+  padding-bottom: 0.6rem;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#remote-url:focus {
+  border-bottom-color: var(--accent);
+}
+
+#remote-url::placeholder {
+  color: var(--dim);
+  opacity: 0.5;
+}
+
+.remote-actions {
+  display: flex;
+  gap: 1rem;
+}
+
 /* reader */
 
 .reader-inner {

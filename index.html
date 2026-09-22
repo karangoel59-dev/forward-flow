@@ -27,9 +27,10 @@
         autocapitalize="off"
         placeholder="Begin."
       ></textarea>
-      <!-- a phone has no ⌘: touch-only stand-ins for ⌘O and ⌘↵ -->
+      <!-- a phone has no ⌘: touch-only stand-ins for ⌘O, ⌘⇧G and ⌘↵ -->
       <nav class="touchbar touchbar-top">
         <button id="touch-entries" type="button">entries</button>
+        <button id="touch-remote" type="button">sync</button>
         <button id="touch-commit" type="button">commit</button>
       </nav>
     </main>
@@ -96,6 +97,30 @@
           <button id="touch-sort" type="button">sort</button>
           <button id="touch-picker-close" type="button">close</button>
         </nav>
+      </div>
+    </section>
+
+    <!-- where entries sync to -->
+    <section id="remote" class="veil" hidden>
+      <div class="setup-inner remote-inner">
+        <p class="setup-line">Sync entries to a git remote</p>
+        <p id="remote-current" class="hint"></p>
+        <input
+          id="remote-url"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          placeholder="https://user:TOKEN@github.com/owner/repo.git"
+        />
+        <p class="hint">
+          A GitHub personal access token works as the password — create one at
+          github.com/settings/tokens with the “repo” scope.
+        </p>
+        <div class="remote-actions">
+          <button id="remote-save" class="ghost-btn" type="button">Save</button>
+          <button id="remote-cancel" class="ghost-btn" type="button">Cancel</button>
+        </div>
       </div>
     </section>
 

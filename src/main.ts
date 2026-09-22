@@ -26,7 +26,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -58,6 +58,10 @@ const pickerFilter = el<HTMLInputElement>("picker-filter");
 const pickerList = el<HTMLUListElement>("picker-list");
 const sortLabel = el<HTMLElement>("sort-label");
 const hudEl = el<HTMLElement>("hud");
+
+const remoteView = el<HTMLElement>("remote");
+const remoteCurrent = el<HTMLElement>("remote-current");
+const remoteUrlInput = el<HTMLInputElement>("remote-url");
 
 // Touch stand-ins for the ⌘-chords; hidden by CSS unless the device is touch-primary.
 const touchTags = el<HTMLButtonElement>("touch-tags");
@@ -144,6 +148,7 @@ function show(next: Mode) {
   setup.hidden = next !== "setup";
   reader.hidden = next !== "reader";
   picker.hidden = next !== "picker";
+  remoteView.hidden = next !== "remote";
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
   if (next === "write") {
@@ -151,6 +156,8 @@ function show(next: Mode) {
     scheduleFit();
   } else if (next === "picker") {
     pickerFilter.focus();
+  } else if (next === "remote") {
+    remoteUrlInput.focus();
   } else {
     (document.activeElement as HTMLElement | null)?.blur();
   }
@@ -513,6 +520,43 @@ async function chooseVault() {
   }
 }
 
+// -------------------------------------------------------------- remote
+
+/** `https://user:token@host/...` -> `https://user:••••@host/...`. Display only, never reused. */
+function maskRemote(url: string): string {
+  return url.replace(/:\/\/([^:/@]+):([^@]*)@/, "://$1:••••@");
+}
+
+async function openRemote() {
+  let current: string | null = null;
+  try {
+    current = await invoke<string | null>("get_remote");
+  } catch {
+    /* treated the same as "not set" */
+  }
+  remoteCurrent.textContent = current
+    ? `Currently: ${maskRemote(current)}`
+    : "Not set yet — entries stay on this device only.";
+  remoteUrlInput.value = "";
+  show("remote");
+}
+
+/** Leaving the input empty and saving is a no-op close, not a way to clear the remote. */
+async function saveRemote() {
+  const url = remoteUrlInput.value.trim();
+  if (!url) {
+    show("write");
+    return;
+  }
+  try {
+    await invoke("set_remote", { url });
+    hud("remote set · syncing…");
+    show("write");
+  } catch (e) {
+    hud(String(e));
+  }
+}
+
 // ---------------------------------------------------------------- keys
 
 async function toggleFullscreen() {
@@ -534,6 +578,17 @@ tagInput.addEventListener("keydown", (e) => {
   e.stopPropagation();
 });
 
+remoteUrlInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveRemote();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    show("write");
+  }
+  e.stopPropagation();
+});
+
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const typing =
@@ -551,7 +606,13 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (mode === "setup") return;
+  if (mod && e.shiftKey && e.key.toLowerCase() === "g") {
+    e.preventDefault();
+    openRemote();
+    return;
+  }
+
+  if (mode === "setup" || mode === "remote") return;
 
   if (mod && e.key.toLowerCase() === "o") {
     e.preventDefault();
@@ -648,11 +709,15 @@ pickerFilter.addEventListener("input", () => {
 
 el<HTMLButtonElement>("setup-pick").addEventListener("click", chooseVault);
 
+el<HTMLButtonElement>("remote-save").addEventListener("click", saveRemote);
+el<HTMLButtonElement>("remote-cancel").addEventListener("click", () => show("write"));
+
 el<HTMLButtonElement>("touch-commit").addEventListener("click", commit);
 el<HTMLButtonElement>("touch-entries").addEventListener("click", () => {
   linkFor = null;
   openPicker();
 });
+el<HTMLButtonElement>("touch-remote").addEventListener("click", openRemote);
 touchTags.addEventListener("click", () => (tagEditing ? saveTags() : beginTagEdit()));
 el<HTMLButtonElement>("touch-link").addEventListener("click", beginLink);
 el<HTMLButtonElement>("touch-reader-back").addEventListener("click", leaveReader);

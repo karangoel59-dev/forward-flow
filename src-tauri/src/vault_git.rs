@@ -113,6 +113,22 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, ann
     });
 }
 
+/// The vault's remote URL, if it has one — for the remote-setup screen to show what's configured
+/// already (this is the whole URL, credentials included, so the caller decides how much of it is
+/// safe to display).
+pub fn get_remote(dir: &std::path::Path) -> Option<String> {
+    backend::get_remote(dir)
+}
+
+/// Points the vault at `url` and immediately tries a push, so a bad URL or an unreachable host is
+/// reported right away — through the same sync-status event a save's push would use — instead of
+/// waiting silently until the next entry.
+pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> Result<(), String> {
+    backend::set_remote(&dir, &url)?;
+    request_push(app.clone(), dir, true);
+    Ok(())
+}
+
 // ---------------------------------------------------------------- tests
 //
 // These exercise the background queue (record -> commit -> push -> status event) through

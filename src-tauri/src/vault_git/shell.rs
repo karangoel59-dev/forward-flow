@@ -144,6 +144,21 @@ fn remote_name(dir: &Path) -> Option<String> {
     }
 }
 
+/// The vault's remote URL, if it has one, for showing back in the remote-setup screen.
+pub fn get_remote(dir: &Path) -> Option<String> {
+    let name = remote_name(dir)?;
+    ok(dir, &["remote", "get-url", &name]).ok().map(|s| s.trim().to_string())
+}
+
+/// Points the vault at `url`, replacing whatever `origin` already pointed at.
+pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
+    match remote_name(dir) {
+        Some(name) => ok(dir, &["remote", "set-url", &name, url])?,
+        None => ok(dir, &["remote", "add", "origin", url])?,
+    };
+    Ok(())
+}
+
 fn looks_offline(msg: &str) -> bool {
     let m = msg.to_lowercase();
     // A refused key or a missing repository also ends in "could not read from remote", but that
@@ -363,6 +378,50 @@ mod tests {
         assert_eq!(log(&remote), vec!["second", "first"]);
         fs::remove_dir_all(&dir).unwrap();
         fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn setting_a_remote_on_a_vault_that_had_none_lets_it_push() {
+        let dir = fresh("set-remote-fresh");
+        let remote = bare_remote("set-remote-fresh-remote");
+        write(&dir, "a.md", "one\n");
+        ensure_repo(&dir).unwrap();
+        commit_all(&dir, "first").unwrap();
+        assert_eq!(push(&dir), SyncOutcome::NoRemote);
+
+        assert_eq!(get_remote(&dir), None);
+        set_remote(&dir, remote.to_str().unwrap()).unwrap();
+        assert_eq!(get_remote(&dir).as_deref(), Some(remote.to_str().unwrap()));
+        assert_eq!(push(&dir), SyncOutcome::Synced);
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn setting_a_remote_again_replaces_it_rather_than_erroring() {
+        let dir = fresh("set-remote-replace");
+        let first_remote = bare_remote("set-remote-replace-first");
+        let second_remote = bare_remote("set-remote-replace-second");
+        write(&dir, "a.md", "one\n");
+        ensure_repo(&dir).unwrap();
+        add_remote(&dir, &first_remote);
+        commit_all(&dir, "first").unwrap();
+
+        set_remote(&dir, second_remote.to_str().unwrap()).unwrap();
+        assert_eq!(get_remote(&dir).as_deref(), Some(second_remote.to_str().unwrap()));
+        assert_eq!(push(&dir), SyncOutcome::Synced);
+        assert_eq!(log(&second_remote), vec!["first"]);
+        // An empty bare repo has no HEAD to log at all — `git log` errors rather than returning
+        // nothing, which is itself the confirmation that first_remote never received a push.
+        assert!(
+            git(&first_remote, &["log", "--format=%s"]).is_err(),
+            "the old remote never saw the push"
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&first_remote).unwrap();
+        fs::remove_dir_all(&second_remote).unwrap();
     }
 
     #[test]

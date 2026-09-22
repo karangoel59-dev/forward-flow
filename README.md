@@ -25,6 +25,7 @@ Rust must be on your PATH (`source "$HOME/.cargo/env"`, or add
 | `⌘↵` or `⌘S` | Commit the entry — writes it to disk and locks it forever |
 | `⌘O` | Open the viewer — browse committed entries |
 | `⌘⇧O` | Change the folder your entries live in |
+| `⌘⇧G` | Set the git remote to sync entries to |
 | `⌘⌃F` | Toggle full screen |
 | `↑` `↓` `⏎` | Move and open, inside the viewer |
 | `⌘T` | Cycle sort: newest, oldest, longest, most linked |
@@ -42,6 +43,18 @@ Inside an open entry:
 
 In the viewer's filter box, a query starting with `#` matches tags only;
 anything else matches date, prose and tags together.
+
+## Syncing
+
+Every commit is pushed to a git remote in the background if one is set —
+`⌘⇧G` (or the "sync" button on touch) opens a small screen for pointing the
+vault at one: `https://user:TOKEN@github.com/owner/repo.git`. A GitHub
+[personal access token](https://github.com/settings/tokens) with the "repo"
+scope works as the password. Without a remote, entries just stay local.
+
+On Android there is no folder picker, so the vault lives in the app's own
+private storage automatically — setting a remote there is how entries leave
+the device.
 
 ## How entries are stored
 

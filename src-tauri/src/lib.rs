@@ -271,6 +271,16 @@ fn set_vault(app: AppHandle, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_remote(app: AppHandle) -> Option<String> {
+    vault_git::get_remote(&vault_dir(&app).ok()?)
+}
+
+#[tauri::command]
+fn set_remote(app: AppHandle, url: String) -> Result<(), String> {
+    vault_git::set_remote(&app, vault_dir(&app)?, url)
+}
+
+#[tauri::command]
 fn list_entries(app: AppHandle) -> Result<Vec<EntryMeta>, String> {
     Ok(collect_entries(&vault_dir(&app)?))
 }
@@ -451,6 +461,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_vault,
             set_vault,
+            get_remote,
+            set_remote,
             list_entries,
             read_entry,
             commit_entry,

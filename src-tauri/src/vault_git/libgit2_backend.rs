@@ -111,6 +111,25 @@ fn remote_name(repo: &Repository) -> Option<String> {
     }
 }
 
+/// The vault's remote URL, if it has one, for showing back in the remote-setup screen.
+pub fn get_remote(dir: &Path) -> Option<String> {
+    let repo = Repository::open(dir).ok()?;
+    let name = remote_name(&repo)?;
+    repo.find_remote(&name).ok()?.url().map(String::from)
+}
+
+/// Points the vault at `url`, replacing whatever `origin` already pointed at.
+pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
+    let repo = Repository::open(dir).map_err(msg)?;
+    match remote_name(&repo) {
+        Some(name) => repo.remote_set_url(&name, url).map_err(msg)?,
+        None => {
+            repo.remote("origin", url).map_err(msg)?;
+        }
+    }
+    Ok(())
+}
+
 /// Pulls `user:pass` (or `user:token`) straight out of an `https://user:pass@host/...` URL. This
 /// is the only credential source on Android: no SSH agent, no keychain, no credential helper.
 fn url_credentials(url: &str) -> Option<(String, String)> {
