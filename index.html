@@ -27,6 +27,11 @@
         autocapitalize="off"
         placeholder="Begin."
       ></textarea>
+      <!-- a phone has no ⌘: touch-only stand-ins for ⌘O and ⌘↵ -->
+      <nav class="touchbar touchbar-top">
+        <button id="touch-entries" type="button">entries</button>
+        <button id="touch-commit" type="button">commit</button>
+      </nav>
     </main>
 
     <!-- read-only view of a committed entry -->
@@ -55,9 +60,16 @@
           <ul id="related-list"></ul>
         </section>
 
+        <nav class="touchbar touchbar-inline">
+          <button id="touch-tags" type="button">tags</button>
+          <button id="touch-link" type="button">link</button>
+          <button id="touch-reader-back" type="button">back</button>
+        </nav>
+
         <footer class="reader-foot hint">
-          <span>t tags</span><span>l link</span><span>↑↓ related</span>
-          <span>⏎ open</span><span>x unlink</span><span>esc back</span>
+          <span class="keys-only">t tags</span><span class="keys-only">l link</span>
+          <span class="keys-only">↑↓ related</span><span class="keys-only">⏎ open</span>
+          <span class="keys-only">x unlink</span><span class="keys-only">esc back</span>
         </footer>
       </article>
     </section>
@@ -75,9 +87,15 @@
         />
         <ul id="picker-list"></ul>
         <footer class="picker-foot hint">
-          <span>↑↓ move</span><span>⏎ open</span><span>⌘T sort</span>
-          <span id="sort-label"></span><span>esc close</span>
+          <span class="keys-only">↑↓ move</span><span class="keys-only">⏎ open</span>
+          <span class="keys-only">⌘T sort</span>
+          <span id="sort-label"></span><span class="keys-only">esc close</span>
         </footer>
+
+        <nav class="touchbar touchbar-inline">
+          <button id="touch-sort" type="button">sort</button>
+          <button id="touch-picker-close" type="button">close</button>
+        </nav>
       </div>
     </section>
 

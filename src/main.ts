@@ -3,6 +3,18 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+// The ⌘-chords this app runs on don't exist on a phone. Rather than trust a single media query
+// (Android's WebView has been known to answer `hover`/`pointer` unreliably), OR several signals
+// together: a false positive just shows a few extra buttons on a mouse-and-keyboard device with
+// a touchscreen, but a false negative strands a phone with no way to commit or open the picker.
+if (
+  navigator.maxTouchPoints > 0 ||
+  window.matchMedia("(hover: none) and (pointer: coarse)").matches ||
+  "ontouchstart" in window
+) {
+  document.documentElement.classList.add("touch");
+}
+
 type EntryMeta = {
   path: string;
   name: string;
@@ -46,6 +58,9 @@ const pickerFilter = el<HTMLInputElement>("picker-filter");
 const pickerList = el<HTMLUListElement>("picker-list");
 const sortLabel = el<HTMLElement>("sort-label");
 const hudEl = el<HTMLElement>("hud");
+
+// Touch stand-ins for the ⌘-chords; hidden by CSS unless the device is touch-primary.
+const touchTags = el<HTMLButtonElement>("touch-tags");
 
 const win = getCurrentWindow();
 
@@ -228,9 +243,28 @@ function renderRelated() {
     preview.textContent = entry.preview || "—";
 
     li.append(top, preview);
+
+    // Touch-only: `x` unlinks the selected row on a keyboard, but there is no
+    // selection to speak of when every row is tappable, so each carries its own.
+    const unlink = document.createElement("button");
+    unlink.type = "button";
+    unlink.className = "row-unlink";
+    unlink.textContent = "unlink";
+    unlink.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      relCursor = i;
+      unlinkSelected();
+    });
+    li.append(unlink);
+
     li.addEventListener("click", () => openEntry(entry.path));
     relatedList.append(li);
   });
+}
+
+/** Leaving the reader returns you to wherever you opened it from. */
+function leaveReader() {
+  readerOrigin === "picker" ? openPicker() : show("write");
 }
 
 async function openEntry(path: string, remember = true) {
@@ -261,6 +295,7 @@ function beginTagEdit() {
   tagInput.value = current.meta.tags.join(", ");
   tagInput.hidden = false;
   tagEditing = true;
+  touchTags.textContent = "save tags";
   tagInput.focus();
   tagInput.select();
 }
@@ -268,6 +303,7 @@ function beginTagEdit() {
 function endTagEdit() {
   tagEditing = false;
   tagInput.hidden = true;
+  touchTags.textContent = "tags";
   tagInput.blur();
 }
 
@@ -443,6 +479,17 @@ function cycleSort() {
   hud(SORT_LABEL[sort]);
 }
 
+/** Closing the picker mid-link returns to the entry that was being linked. */
+function leavePicker() {
+  if (linkFor) {
+    const back = linkFor;
+    linkFor = null;
+    openEntry(back, false);
+  } else {
+    show("write");
+  }
+}
+
 // ---------------------------------------------------------------- vault
 
 async function chooseVault() {
@@ -532,7 +579,7 @@ document.addEventListener("keydown", (e) => {
 
     if (e.key === "Escape") {
       e.preventDefault();
-      readerOrigin === "picker" ? openPicker() : show("write");
+      leaveReader();
       return;
     }
     if (typing) return;
@@ -572,13 +619,7 @@ document.addEventListener("keydown", (e) => {
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      if (linkFor) {
-        const back = linkFor;
-        linkFor = null;
-        openEntry(back, false);
-      } else {
-        show("write");
-      }
+      leavePicker();
     } else if (e.key === "ArrowDown" || (mod && e.key.toLowerCase() === "j")) {
       e.preventDefault();
       movePicker(1);
@@ -607,11 +648,25 @@ pickerFilter.addEventListener("input", () => {
 
 el<HTMLButtonElement>("setup-pick").addEventListener("click", chooseVault);
 
+el<HTMLButtonElement>("touch-commit").addEventListener("click", commit);
+el<HTMLButtonElement>("touch-entries").addEventListener("click", () => {
+  linkFor = null;
+  openPicker();
+});
+touchTags.addEventListener("click", () => (tagEditing ? saveTags() : beginTagEdit()));
+el<HTMLButtonElement>("touch-link").addEventListener("click", beginLink);
+el<HTMLButtonElement>("touch-reader-back").addEventListener("click", leaveReader);
+el<HTMLButtonElement>("touch-sort").addEventListener("click", cycleSort);
+el<HTMLButtonElement>("touch-picker-close").addEventListener("click", leavePicker);
+
 window.addEventListener("resize", scheduleFit);
 
 // Keep focus on the page: clicking anywhere in write mode returns to the caret.
+// The touch controls are the exception — swallowing their mousedown would stop
+// the tap from ever becoming a click.
 document.addEventListener("mousedown", (e) => {
-  if (mode === "write" && e.target !== editor) {
+  const target = e.target as HTMLElement | null;
+  if (mode === "write" && target !== editor && !target?.closest(".touchbar")) {
     e.preventDefault();
     editor.focus();
   }

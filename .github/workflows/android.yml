@@ -66,6 +66,43 @@ jobs:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: npx tauri android init --ci
 
+      # `tauri android init` doesn't read src-tauri/icons/android at all — it renders its own
+      # bundled template (crates/tauri-cli/templates/mobile/android/app/src/main/res), which ships
+      # Tauri's own placeholder logo as the mipmap-*/ic_launcher* set (confirmed: an earlier build's
+      # APK had Tauri's logo baked in, byte for byte). Overwrite that with ours, and add the
+      # adaptive-icon XML + background color our own `tauri icon` run already produced — the
+      # default template has neither (it predates mipmap-anydpi-v26 adaptive icons), so without
+      # this every device just gets an OS-auto-masked flat square instead.
+      - name: Install our launcher icon into the generated Android project
+        run: |
+          res=src-tauri/gen/android/app/src/main/res
+          for d in mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            cp "src-tauri/icons/android/$d/ic_launcher.png" "$res/$d/ic_launcher.png"
+            cp "src-tauri/icons/android/$d/ic_launcher_round.png" "$res/$d/ic_launcher_round.png"
+            cp "src-tauri/icons/android/$d/ic_launcher_foreground.png" "$res/$d/ic_launcher_foreground.png"
+          done
+          mkdir -p "$res/mipmap-anydpi-v26"
+          cp src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml "$res/mipmap-anydpi-v26/ic_launcher.xml"
+          python3 - <<'PY'
+          import re
+          import pathlib
+
+          colors = pathlib.Path("src-tauri/gen/android/app/src/main/res/values/colors.xml")
+          ours = pathlib.Path("src-tauri/icons/android/values/ic_launcher_background.xml").read_text()
+          bg = re.search(r'<color name="ic_launcher_background">(#[0-9a-fA-F]+)</color>', ours).group(1)
+
+          text = colors.read_text()
+          assert "ic_launcher_background" not in text, "colors.xml already defines this — template changed upstream"
+          text = text.replace(
+              "</resources>",
+              f'    <color name="ic_launcher_background">{bg}</color>\n</resources>',
+          )
+          colors.write_text(text)
+          PY
+          echo "--- installed icon files ---"
+          find "$res/mipmap-anydpi-v26" "$res"/mipmap-*dpi -name 'ic_launcher*'
+          grep -n "ic_launcher_background" "$res/values/colors.xml"
+
       # Release builds must be signed to be installable at all. This key is generated once
       # (openssl, not keytool — see the commit that added this step) and stored as repo secrets;
       # losing it means future releases can never update an install of an earlier one, so it's

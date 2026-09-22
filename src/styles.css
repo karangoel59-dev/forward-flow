@@ -399,3 +399,63 @@ body {
 .row-link-count {
   color: var(--dim);
 }
+
+/* ------------------------------------------------------ touch controls
+   Everything here is driven by ⌘-chords a phone has no way to type, so on a
+   touch-primary device the key hints are replaced by the buttons they named.
+   Desktop never sees any of this. `touch` is set on <html> by main.ts rather
+   than keyed off a media query here, so that one misjudged query can't leave a
+   phone with no way to commit at all. */
+
+.touchbar,
+.row-unlink {
+  display: none;
+}
+
+:root.touch .touchbar {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+/* No boxes or fills — the tap target is padded well past the glyphs so it
+   stays thumb-sized while still reading as quiet text. */
+:root.touch .touchbar button,
+:root.touch .row-unlink {
+  font: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  background: transparent;
+  border: 0;
+  padding: 0.6rem 0.25rem;
+  cursor: pointer;
+}
+
+:root.touch .touchbar button:active,
+:root.touch .row-unlink:active {
+  color: var(--accent);
+}
+
+/* Writing: pinned out of the way, and above the soft keyboard rather than
+   behind it like a bottom bar would be. */
+:root.touch .touchbar-top {
+  position: fixed;
+  top: max(0.5rem, env(safe-area-inset-top));
+  right: max(0.9rem, env(safe-area-inset-right));
+  z-index: 15;
+}
+
+:root.touch .touchbar-inline {
+  padding-top: 0.75rem;
+}
+
+:root.touch .keys-only {
+  display: none;
+}
+
+:root.touch .row-unlink {
+  display: inline-block;
+  margin-top: 0.15rem;
+  padding-left: 0;
+}
