@@ -66,9 +66,17 @@ jobs:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: npx tauri android init --ci
 
+      # The symlinks above cover most tools that shell out to the old prefixed names, but vendored
+      # OpenSSL's Configure hardcodes an unqualified "<triple>-ranlib" into its Makefile without
+      # prepending the NDK's bin dir, so it depends on PATH resolution order at the moment make
+      # runs it — fragile. llvm-ranlib/llvm-ar are target-agnostic (they just index/archive object
+      # files, unlike the compiler), so pointing RANLIB/AR at them directly sidesteps that
+      # entirely, for every one of the 4 architectures being built here.
       - name: Build debug APK
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          RANLIB: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          AR: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: npx tauri android build --apk --debug
 
       - name: Locate APK
