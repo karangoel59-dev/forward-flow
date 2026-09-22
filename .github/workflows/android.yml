@@ -66,18 +66,31 @@ jobs:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: npx tauri android init --ci
 
+      # Release builds must be signed to be installable at all. This key is generated once
+      # (openssl, not keytool — see the commit that added this step) and stored as repo secrets;
+      # losing it means future releases can never update an install of an earlier one, so it's
+      # also kept outside CI. See src-tauri/gen/android/keystore.properties' consumer in
+      # app/build.gradle.kts for how Tauri's Android template wires this file up.
+      - name: Set up Android release signing
+        run: |
+          cd src-tauri/gen/android
+          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > keystore.properties
+          echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> keystore.properties
+          base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > "$RUNNER_TEMP/release.p12"
+          echo "storeFile=$RUNNER_TEMP/release.p12" >> keystore.properties
+
       # The symlinks above cover most tools that shell out to the old prefixed names, but vendored
       # OpenSSL's Configure hardcodes an unqualified "<triple>-ranlib" into its Makefile without
       # prepending the NDK's bin dir, so it depends on PATH resolution order at the moment make
       # runs it — fragile. llvm-ranlib/llvm-ar are target-agnostic (they just index/archive object
       # files, unlike the compiler), so pointing RANLIB/AR at them directly sidesteps that
       # entirely, for every one of the 4 architectures being built here.
-      - name: Build debug APK
+      - name: Build release APK
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           RANLIB: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
           AR: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-        run: npx tauri android build --apk --debug
+        run: npx tauri android build --apk
 
       - name: Locate APK
         id: apk
@@ -87,7 +100,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: forward-flow-android-debug
+          name: forward-flow-android-release
           path: ${{ steps.apk.outputs.path }}
 
       - name: Attach APK to release
