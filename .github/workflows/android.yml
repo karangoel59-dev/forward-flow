@@ -36,6 +36,20 @@ jobs:
           add-to-path: true
           link-to-sdk: true
 
+      # Android NDK r23+ dropped the GNU-binutils-style prefixed tools (e.g.
+      # aarch64-linux-android-ranlib), keeping only the unprefixed llvm-* ones. Vendored OpenSSL's
+      # build (a dependency of the Android git backend's git2 crate) still shells out to the old
+      # prefixed names directly, so put symlinks back for every target this workflow builds.
+      - name: Restore legacy binutils names the NDK dropped
+        run: |
+          bin="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for triple in aarch64-linux-android arm-linux-androideabi armv7a-linux-androideabi i686-linux-android x86_64-linux-android; do
+            for tool in ar ranlib nm strip objcopy objdump; do
+              link="$bin/$triple-$tool"
+              [ -e "$link" ] || ln -s "$bin/llvm-$tool" "$link"
+            done
+          done
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
