@@ -36,10 +36,44 @@ fn msg(e: git2::Error) -> String {
     e.message().to_string()
 }
 
+// ------------------------------------------------------------ TLS trust roots
+
+/// Android keeps its trust store in the Java runtime, not as PEM files on disk, so the OpenSSL
+/// this crate is statically linked against finds no certificate authorities at all and rejects
+/// every TLS handshake — pushes fail with "the SSL certificate is invalid" no matter how valid
+/// the server's certificate is. Ship Mozilla's roots with the app and point libgit2 at them.
+const CA_BUNDLE: &[u8] = include_bytes!("../../assets/cacert.pem");
+
+/// Written into the vault (the one directory guaranteed writable before a repo even exists), so
+/// `ensure_repo` also keeps it out of the commits.
+const CA_BUNDLE_NAME: &str = ".forward-flow-cacert.pem";
+
+/// Extracts the bundle next to the vault and registers it with libgit2. Idempotent, and cheap
+/// enough after the first call to just run at the top of every entry point below.
+fn ensure_ca_bundle(vault: &Path) {
+    let path = vault.join(CA_BUNDLE_NAME);
+    if !path.exists() && fs::write(&path, CA_BUNDLE).is_err() {
+        return;
+    }
+
+    // `set_ssl_cert_file` is the one that actually matters: it sets the locations on libgit2's
+    // SSL context whenever it is called. SSL_CERT_FILE is only read by OpenSSL once, during the
+    // global init that the first `Repository::open` of the process triggers, so on its own it
+    // would be a race with whichever entry point ran first — it is set here purely as a backstop
+    // for any OpenSSL path that reads the environment directly.
+    std::env::set_var("SSL_CERT_FILE", &path);
+    // Safe in the sense that matters here: this mutates libgit2 global state, and every caller
+    // reaches it through vault_git's single-threaded push queue.
+    unsafe {
+        let _ = git2::opts::set_ssl_cert_file(path.as_path());
+    }
+}
+
 // ---------------------------------------------------------------- repository
 
 /// Makes `dir` a git repository if it is not one yet. Safe to call every time.
 pub fn ensure_repo(dir: &Path) -> Result<(), String> {
+    ensure_ca_bundle(dir);
     let repo = if dir.join(".git").exists() {
         Repository::open(dir).map_err(msg)?
     } else {
@@ -61,9 +95,22 @@ pub fn ensure_repo(dir: &Path) -> Result<(), String> {
         local.set_str("user.name", "Forward Flow").map_err(msg)?;
     }
 
+    // Rewritten rather than only created, so that vaults set up before the CA bundle existed
+    // still learn to ignore it instead of committing 188KB of certificates.
     let ignore = dir.join(".gitignore");
-    if !ignore.exists() {
-        fs::write(&ignore, ".DS_Store\n").map_err(|e| e.to_string())?;
+    let existing = fs::read_to_string(&ignore).unwrap_or_default();
+    let mut wanted = existing.clone();
+    for line in [".DS_Store", CA_BUNDLE_NAME] {
+        if !wanted.lines().any(|l| l.trim() == line) {
+            if !wanted.is_empty() && !wanted.ends_with('\n') {
+                wanted.push('\n');
+            }
+            wanted.push_str(line);
+            wanted.push('\n');
+        }
+    }
+    if wanted != existing {
+        fs::write(&ignore, wanted).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -76,6 +123,7 @@ fn signature(repo: &Repository) -> Result<Signature<'static>, String> {
 
 /// Stages everything in the vault and commits it. Returns false when there was nothing new.
 pub fn commit_all(dir: &Path, message: &str) -> Result<bool, String> {
+    ensure_ca_bundle(dir);
     let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let repo = Repository::open(dir).map_err(msg)?;
 
@@ -113,6 +161,7 @@ fn remote_name(repo: &Repository) -> Option<String> {
 
 /// The vault's remote URL, if it has one, for showing back in the remote-setup screen.
 pub fn get_remote(dir: &Path) -> Option<String> {
+    ensure_ca_bundle(dir);
     let repo = Repository::open(dir).ok()?;
     let name = remote_name(&repo)?;
     // `find_remote(...).ok()?` as part of the tail expression ties the temporary `Remote`'s drop
@@ -124,6 +173,7 @@ pub fn get_remote(dir: &Path) -> Option<String> {
 
 /// Points the vault at `url`, replacing whatever `origin` already pointed at.
 pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
+    ensure_ca_bundle(dir);
     let repo = Repository::open(dir).map_err(msg)?;
     match remote_name(&repo) {
         Some(name) => repo.remote_set_url(&name, url).map_err(msg)?,
@@ -292,6 +342,7 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
 
 /// Pushes the current branch, merging in the remote's own changes first if it has moved on.
 pub fn push(dir: &Path) -> SyncOutcome {
+    ensure_ca_bundle(dir);
     let repo = match Repository::open(dir) {
         Ok(r) => r,
         Err(e) => return classify(msg(e)),
@@ -394,6 +445,34 @@ mod tests {
         assert!(matches!(push(&dir), SyncOutcome::Failed(e) if e.contains("http")));
         fs::remove_dir_all(&dir).unwrap();
         fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn the_ca_bundle_is_extracted_but_never_committed() {
+        let dir = fresh("lg2-ca");
+        write(&dir, "a.md", "one\n");
+        ensure_repo(&dir).unwrap();
+        commit_all(&dir, "first").unwrap();
+
+        assert!(dir.join(CA_BUNDLE_NAME).exists(), "OpenSSL needs it on disk to find it");
+        let tracked = git(&dir, &["ls-files"]).unwrap();
+        assert!(tracked.contains("a.md"));
+        assert!(!tracked.contains(CA_BUNDLE_NAME), "188KB of roots do not belong in the vault");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The Android vault in the wild already has a .gitignore from before the bundle existed.
+    #[test]
+    fn an_older_vault_learns_to_ignore_the_ca_bundle_without_losing_what_it_had() {
+        let dir = fresh("lg2-ca-upgrade");
+        fs::write(dir.join(".gitignore"), ".DS_Store\nscratch/\n").unwrap();
+
+        ensure_repo(&dir).unwrap();
+
+        let ignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(ignore.contains(CA_BUNDLE_NAME));
+        assert!(ignore.contains("scratch/"), "entries already there are kept");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

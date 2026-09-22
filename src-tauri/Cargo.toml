@@ -19,10 +19,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 
-# Android has no `git` binary to shell out to, so the vault_git Android backend talks git over an
-# embedded libgit2 instead (see src/vault_git/libgit2_backend.rs). Vendored so nothing needs to be
-# present on the device, HTTPS-only (no SSH) to avoid also vendoring libssh2. Scoped to the Android
-# target only, so it never touches the desktop build.
+# Only Android actually runs the libgit2 backend (see src/vault_git/libgit2_backend.rs), but it is
+# compiled everywhere so that it type-checks and its tests run during ordinary desktop work. Two
+# compile errors in that file reached a device only via a 15-minute Android CI build before this;
+# with no TLS features here the C build is quick and the desktop app never calls into it.
+git2 = { version = "0.19", default-features = false }
+
+# Android has no `git` binary to shell out to, so there it talks git over an embedded libgit2.
+# Vendored so nothing needs to be present on the device, HTTPS-only (no SSH) to avoid also
+# vendoring libssh2. Cargo unions these features with the ones above for the Android target.
 [target.'cfg(target_os = "android")'.dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-openssl", "vendored-libgit2", "https"] }
 

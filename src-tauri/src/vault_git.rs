@@ -17,7 +17,10 @@ use std::thread;
 use tauri::{AppHandle, Emitter, Runtime};
 
 mod shell;
-#[cfg(target_os = "android")]
+// Compiled on every platform, but wired up only on Android below. Keeping it in the desktop build
+// is what lets `cargo check` and `cargo test` see it at all: its own tests never ran anywhere
+// while it was cfg'd out, and type errors in it surfaced only from an Android CI build.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod libgit2_backend;
 
 #[cfg(not(target_os = "android"))]
