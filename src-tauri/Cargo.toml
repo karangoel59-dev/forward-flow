@@ -19,6 +19,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 
+# Android has no `git` binary to shell out to, so the vault_git Android backend talks git over an
+# embedded libgit2 instead (see src/vault_git/libgit2_backend.rs). Vendored so nothing needs to be
+# present on the device, HTTPS-only (no SSH) to avoid also vendoring libssh2. Scoped to the Android
+# target only, so it never touches the desktop build.
+[target.'cfg(target_os = "android")'.dependencies]
+git2 = { version = "0.19", default-features = false, features = ["vendored-openssl", "vendored-libgit2", "https"] }
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
