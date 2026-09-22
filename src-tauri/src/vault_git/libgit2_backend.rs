@@ -115,7 +115,11 @@ fn remote_name(repo: &Repository) -> Option<String> {
 pub fn get_remote(dir: &Path) -> Option<String> {
     let repo = Repository::open(dir).ok()?;
     let name = remote_name(&repo)?;
-    repo.find_remote(&name).ok()?.url().map(String::from)
+    // `find_remote(...).ok()?` as part of the tail expression ties the temporary `Remote`'s drop
+    // to `repo`'s in a way the borrow checker won't accept (same shape as the push_once fix
+    // earlier this session) — bind it first so it's dropped, in order, before `repo` is.
+    let remote = repo.find_remote(&name).ok()?;
+    remote.url().map(String::from)
 }
 
 /// Points the vault at `url`, replacing whatever `origin` already pointed at.
