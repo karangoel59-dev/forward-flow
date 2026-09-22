@@ -79,15 +79,55 @@ jobs:
           base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > "$RUNNER_TEMP/release.p12"
           echo "storeFile=$RUNNER_TEMP/release.p12" >> keystore.properties
 
-      # TEMPORARY: last release APK came out "-unsigned" despite the step above, so dump how the
-      # generated Gradle project actually wires (or doesn't wire) signing before spending another
-      # full build on it.
-      - name: Debug signing config
+      # keystore.properties alone does nothing — Tauri's generated build.gradle.kts has no
+      # signingConfigs block and never references that file (confirmed: an earlier run's release
+      # APK came out named "...-unsigned.apk"). Tauri's own Android signing docs are explicit that
+      # wiring signingConfigs into build.gradle.kts is a manual step, normally a one-time edit —
+      # but gen/android is regenerated fresh every run here, never committed, so it has to be
+      # patched every time. Anchors below match the current upstream template verbatim
+      # (crates/tauri-cli/templates/mobile/android/app/build.gradle.kts).
+      - name: Wire release signing into the generated Gradle build
         run: |
-          echo "--- keystore.properties ---"
-          cat src-tauri/gen/android/keystore.properties
-          echo "--- app/build.gradle.kts (signing/keystore lines) ---"
-          grep -n -i "keystore\|signing\|password\|keyAlias" src-tauri/gen/android/app/build.gradle.kts || echo "(no matches)"
+          python3 - <<'PY'
+          import pathlib
+
+          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
+          text = p.read_text()
+
+          text = text.replace(
+              "import java.util.Properties\n",
+              "import java.util.Properties\nimport java.io.FileInputStream\n",
+              1,
+          )
+
+          signing_block = '''    signingConfigs {
+              create("release") {
+                  val keystorePropertiesFile = rootProject.file("keystore.properties")
+                  val keystoreProperties = Properties()
+                  if (keystorePropertiesFile.exists()) {
+                      keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+                  }
+                  keyAlias = keystoreProperties["keyAlias"] as String
+                  keyPassword = keystoreProperties["password"] as String
+                  storeFile = file(keystoreProperties["storeFile"] as String)
+                  storePassword = keystoreProperties["password"] as String
+              }
+          }
+      '''
+          with_signing_configs = text.replace("android {\n", "android {\n" + signing_block, 1)
+          assert with_signing_configs != text, "anchor 'android {' not found — template changed upstream"
+
+          wired = with_signing_configs.replace(
+              '        getByName("release") {\n',
+              '        getByName("release") {\n            signingConfig = signingConfigs.getByName("release")\n',
+              1,
+          )
+          assert wired != with_signing_configs, 'anchor \'getByName("release") {\' not found — template changed upstream'
+
+          p.write_text(wired)
+          PY
+          echo "--- patched build.gradle.kts (signing lines) ---"
+          grep -n -i "signing\|keyAlias\|FileInputStream" src-tauri/gen/android/app/build.gradle.kts
 
       # The symlinks above cover most tools that shell out to the old prefixed names, but vendored
       # OpenSSL's Configure hardcodes an unqualified "<triple>-ranlib" into its Makefile without
