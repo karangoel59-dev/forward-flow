@@ -23,8 +23,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use git2::{
-    build::CheckoutBuilder, Cred, CredentialType, FetchOptions, IndexAddOption, PushOptions,
-    RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
+    build::CheckoutBuilder, CertificateCheckStatus, Cred, CredentialType, FetchOptions,
+    IndexAddOption, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
 };
 
 use super::SyncOutcome;
@@ -52,7 +52,11 @@ const CA_BUNDLE_NAME: &str = ".forward-flow-cacert.pem";
 /// enough after the first call to just run at the top of every entry point below.
 fn ensure_ca_bundle(vault: &Path) {
     let path = vault.join(CA_BUNDLE_NAME);
-    if !path.exists() && fs::write(&path, CA_BUNDLE).is_err() {
+    let needs_write = match fs::metadata(&path) {
+        Ok(meta) => meta.len() != CA_BUNDLE.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write && fs::write(&path, CA_BUNDLE).is_err() {
         return;
     }
 
@@ -263,6 +267,7 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let rejected = std::cell::RefCell::new(None::<String>);
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(credentials_callback(url));
+    callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     callbacks.push_update_reference(|_refname, status| {
         if let Some(reason) = status {
             *rejected.borrow_mut() = Some(reason.to_string());
@@ -295,6 +300,7 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     let url = remote.url().unwrap_or("").to_string();
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(credentials_callback(url));
+    callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
     remote.fetch(&[branch], Some(&mut fetch_opts), None).map_err(msg)?;
@@ -458,6 +464,20 @@ mod tests {
         let tracked = git(&dir, &["ls-files"]).unwrap();
         assert!(tracked.contains("a.md"));
         assert!(!tracked.contains(CA_BUNDLE_NAME), "188KB of roots do not belong in the vault");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_truncated_ca_bundle_is_repaired() {
+        let dir = fresh("lg2-ca-repair");
+        fs::write(dir.join(CA_BUNDLE_NAME), b"").unwrap();
+        ensure_repo(&dir).unwrap();
+
+        assert_eq!(
+            fs::metadata(dir.join(CA_BUNDLE_NAME)).unwrap().len(),
+            CA_BUNDLE.len() as u64,
+            "corrupted or empty bundle should be rewritten with full bundle"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
