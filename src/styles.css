@@ -609,18 +609,36 @@ kbd {
   color: var(--accent);
 }
 
+:root.touch .write-count {
+  top: max(0.8rem, env(safe-area-inset-top));
+  bottom: auto;
+  left: max(1.2rem, env(safe-area-inset-left));
+}
+
 :root.touch .touchbar-top {
   position: fixed;
-  top: max(0.6rem, env(safe-area-inset-top));
-  right: max(0.9rem, env(safe-area-inset-right));
+  bottom: max(1.2rem, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  right: auto;
+  top: auto;
   z-index: 15;
-  background: color-mix(in srgb, var(--paper) 80%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid color-mix(in srgb, var(--dim) 22%, transparent);
+  background: color-mix(in srgb, var(--paper) 85%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid color-mix(in srgb, var(--dim) 25%, transparent);
   border-radius: 999px;
-  padding: 0.15rem 0.85rem;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  padding: 0.2rem 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+}
+
+:root.touch #touch-commit {
+  color: var(--accent);
+}
+
+:root.touch #hud {
+  bottom: max(4.4rem, calc(env(safe-area-inset-bottom) + 3.8rem));
 }
 
 :root.touch .touchbar-inline {
