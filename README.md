@@ -24,6 +24,7 @@ Rust must be on your PATH (`source "$HOME/.cargo/env"`, or add
 | --- | --- |
 | `⌘↵` or `⌘S` | Commit the entry — writes it to disk and locks it forever |
 | `⌘O` | Open the viewer — browse committed entries |
+| `⌘R` | Re-sync vault — fetch & merge latest changes from remote, push local commits |
 | `⌘⇧O` | Change the folder your entries live in |
 | `⌘⇧G` | Set the git remote to sync entries to |
 | `⌘⌃F` | Toggle full screen |
@@ -37,6 +38,7 @@ Inside an open entry:
 | --- | --- |
 | `t` | Edit tags — comma separated, `⏎` to save, `esc` to cancel |
 | `l` | Link this entry to another — pick the other one from the list |
+| `d` | Delete this entry — unlinks reciprocal links, removes file, and makes a revert commit |
 | `↑` `↓` | Move through Related |
 | `⏎` | Open the selected related entry |
 | `x` | Unlink the selected related entry |
@@ -47,10 +49,15 @@ anything else matches date, prose and tags together.
 ## Syncing
 
 Every commit is pushed to a git remote in the background if one is set —
-`⌘⇧G` (or the "sync" button on touch) opens a small screen for pointing the
+`⌘⇧G` (or the "remote" button on touch) opens a screen for pointing the
 vault at one: `https://user:TOKEN@github.com/owner/repo.git`. A GitHub
 [personal access token](https://github.com/settings/tokens) with the "repo"
 scope works as the password. Without a remote, entries just stay local.
+
+- **Background Auto-Sync**: The app automatically polls and merges remote changes every 60 seconds whenever a remote is configured.
+- **Window Focus Sync**: Returning to or focusing the app immediately triggers a sync check so entries written on other devices surface right away.
+- **Manual Re-sync**: Hit `⌘R` (or tap the "sync" button on touch, or "Sync now" in the remote screen) to immediately pull, merge, and push.
+- **Live Updating**: When new commits arrive from another device, the viewer and open entries automatically refresh without needing an app restart.
 
 On Android there is no folder picker, so the vault lives in the app's own
 private storage automatically — setting a remote there is how entries leave
@@ -99,6 +106,7 @@ pushed in the background:
 | You do | Commit |
 | --- | --- |
 | Commit an entry | `Add entry 2026-09-21-143012` |
+| Delete an entry | `Revert entry 2026-09-21-143012` |
 | Edit tags | `Tag 2026-09-21-143012` |
 | Link or unlink two entries | `Link … and …` / `Unlink … and …` |
 | Choose a folder, or launch the app | `Start Forward Flow vault` / `Sync vault` |
@@ -117,6 +125,13 @@ git remote add origin git@github.com:you/fflow.git
 ```
 
 Without a remote the entries are still committed locally, and the app stays quiet about it.
+
+### Tag-driven Git Branches
+
+Adding tags to any note creates a dedicated git branch named `tag/<tag-name>` (e.g. `tag/ideas`,
+`tag/work`) pointing to the latest commit and pushes it to the remote. When a tag is removed from an
+entry (or when entries are deleted), if no note in the entire vault uses that tag anymore, the branch
+`tag/<tag-name>` is automatically deleted both locally and on the remote.
 
 Details worth knowing:
 
