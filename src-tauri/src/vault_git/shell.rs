@@ -244,6 +244,85 @@ pub fn push(dir: &Path) -> SyncOutcome {
     }
 }
 
+/// Brings in any commits the remote gained since, rebasing local commits on top.
+/// Returns Ok(true) if local HEAD was updated (new commits fetched), Ok(false) if up-to-date.
+pub fn pull_and_merge(dir: &Path) -> Result<bool, String> {
+    let Some(remote) = remote_name(dir) else {
+        return Ok(false);
+    };
+    let branch = match ok(dir, &["symbolic-ref", "--short", "HEAD"]) {
+        Ok(b) => b.trim().to_string(),
+        Err(_) => return Ok(false),
+    };
+    let head_before = ok(dir, &["rev-parse", "HEAD"]).unwrap_or_default().trim().to_string();
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let pulled = run(
+        dir,
+        &["pull", "--rebase", "--autostash", "--quiet", remote.as_str(), branch.as_str()],
+    );
+    match pulled {
+        Ok(out) if out.success => {
+            let head_after = ok(dir, &["rev-parse", "HEAD"]).unwrap_or_default().trim().to_string();
+            Ok(!head_before.is_empty() && head_before != head_after)
+        }
+        Ok(out) => {
+            let _ = run(dir, &["rebase", "--abort"]);
+            let err = last_line(&out.stderr, &out.stdout);
+            if err.contains("couldn't find remote ref") || err.contains("no such ref") {
+                Ok(false)
+            } else {
+                Err(err)
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Synchronizes git branches for active tags:
+/// - Creates/updates branch `tag/<tag>` at HEAD for each tag in `active_tags` and pushes it to remote.
+/// - Deletes any local and remote branch `tag/<tag>` whose tag is not in `active_tags`.
+pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), String> {
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let remote = remote_name(dir);
+
+    // 1. Create missing tag branches
+    for tag in active_tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let branch_name = format!("tag/{}", tag);
+        let exists = run(dir, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch_name)])
+            .map(|out| out.success)
+            .unwrap_or(false);
+        if !exists {
+            let _ = ok(dir, &["branch", &branch_name, "HEAD"]);
+            if let Some(ref r) = remote {
+                let _ = run(dir, &["push", "--quiet", r.as_str(), &format!("refs/heads/{}", branch_name)]);
+            }
+        }
+    }
+
+    // 2. Delete orphaned tag branches
+    let local_branches = match ok(dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]) {
+        Ok(s) => s.lines().map(str::trim).map(String::from).collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+
+    for branch in local_branches {
+        if let Some(tag) = branch.strip_prefix("tag/") {
+            if !active_tags.iter().any(|t| t == tag) {
+                let _ = run(dir, &["branch", "-D", &branch]);
+                if let Some(ref r) = remote {
+                    let _ = run(dir, &["push", "--quiet", r.as_str(), "--delete", &branch]);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------- shared test helpers
 //
 // Exposed to sibling backend test modules too, so the libgit2 backend's tests can set up and
@@ -513,5 +592,70 @@ mod tests {
         assert!(looks_behind("! [rejected] main -> main (fetch first)"));
         assert!(looks_behind("! [rejected] main -> main (non-fast-forward)"));
         assert!(!looks_behind("! [remote rejected] main -> main (protected branch hook declined)"));
+    }
+
+    #[test]
+    fn tag_branches_are_created_and_cleaned_up() {
+        let dir = fresh("tag-branches");
+        let remote = bare_remote("tag-branches-remote");
+        write(&dir, "a.md", "content\n");
+        ensure_repo(&dir).unwrap();
+        add_remote(&dir, &remote);
+        commit_all(&dir, "first").unwrap();
+        push(&dir);
+
+        // 1. Add tags "ideas" and "work"
+        sync_tag_branches(&dir, &[ "ideas".into(), "work".into() ]).unwrap();
+        let branches = ok(&dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
+        assert!(branches.contains("tag/ideas"));
+        assert!(branches.contains("tag/work"));
+        let remote_branches = ok(&remote, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
+        assert!(remote_branches.contains("tag/ideas"));
+        assert!(remote_branches.contains("tag/work"));
+
+        // 2. Remove tag "ideas", keep "work", add "life"
+        sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
+        let branches2 = ok(&dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
+        assert!(!branches2.contains("tag/ideas"), "tag/ideas should be deleted");
+        assert!(branches2.contains("tag/work"));
+        assert!(branches2.contains("tag/life"));
+        let remote_branches2 = ok(&remote, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
+        assert!(!remote_branches2.contains("tag/ideas"), "tag/ideas deleted on remote");
+        assert!(remote_branches2.contains("tag/work"));
+        assert!(remote_branches2.contains("tag/life"));
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn pull_and_merge_updates_head_when_remote_gains_commits() {
+        let remote = bare_remote("pull-remote");
+        let client_a = fresh("pull-client-a");
+        write(&client_a, "a.md", "one\n");
+        ensure_repo(&client_a).unwrap();
+        add_remote(&client_a, &remote);
+        commit_all(&client_a, "commit A").unwrap();
+        push(&client_a);
+
+        let client_b = fresh("pull-client-b");
+        fs::remove_dir_all(&client_b).unwrap();
+        git(&std::env::temp_dir(), &["clone", "--quiet", remote.to_str().unwrap(), client_b.to_str().unwrap()]).unwrap();
+        ensure_repo(&client_b).unwrap();
+
+        // Client A pushes a second commit
+        write(&client_a, "b.md", "two\n");
+        commit_all(&client_a, "commit A2").unwrap();
+        push(&client_a);
+
+        // Client B is clean, pulls without any local commit
+        assert!(!client_b.join("b.md").exists());
+        let updated = pull_and_merge(&client_b).unwrap();
+        assert!(updated, "pull_and_merge should return true when commits arrived");
+        assert!(client_b.join("b.md").exists(), "new file from remote is now present");
+
+        fs::remove_dir_all(&client_a).unwrap();
+        fs::remove_dir_all(&client_b).unwrap();
+        fs::remove_dir_all(&remote).unwrap();
     }
 }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 mod vault_git;
 
@@ -281,6 +281,13 @@ fn set_remote(app: AppHandle, url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn resync_vault(app: AppHandle) -> Result<(), String> {
+    let dir = vault_dir(&app)?;
+    vault_git::sync_now(&app, dir, true);
+    Ok(())
+}
+
+#[tauri::command]
 fn list_entries(app: AppHandle) -> Result<Vec<EntryMeta>, String> {
     Ok(collect_entries(&vault_dir(&app)?))
 }
@@ -336,12 +343,57 @@ fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
     Ok(meta_from(&path, &raw))
 }
 
+fn collect_active_tags(dir: &PathBuf) -> Vec<String> {
+    let mut tags = Vec::new();
+    for entry in collect_entries(dir) {
+        for tag in entry.tags {
+            if !tags.contains(&tag) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags
+}
+
+#[tauri::command]
+fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
+    let target = entry_in_vault(&app, &path)?;
+    let raw = fs::read_to_string(&target).map_err(|e| e.to_string())?;
+    let meta = meta_from(&target, &raw);
+    let stem = meta.name.clone();
+    let dir = vault_dir(&app)?;
+
+    // 1. Remove reciprocal links in other entries pointing to this entry
+    for other in collect_entries(&dir) {
+        if other.name != stem && other.links.contains(&stem) {
+            let p = PathBuf::from(&other.path);
+            let _ = remove_link(&p, &stem);
+        }
+    }
+
+    // 2. Remove the file itself from the vault
+    fs::remove_file(&target).map_err(|e| format!("failed to delete file: {}", e))?;
+
+    // 3. Make a git commit for the deletion (revert commit)
+    vault_git::record(&app, dir.clone(), format!("Revert entry {}", stem), true);
+
+    // 4. Update tag branches in case any tags were orphaned by this deletion
+    let active = collect_active_tags(&dir);
+    vault_git::sync_tag_branches(&app, dir, active);
+
+    let _ = app.emit("vault-updated", ());
+    Ok(())
+}
+
 #[tauri::command]
 fn set_tags(app: AppHandle, path: String, tags: Vec<String>) -> Result<EntryMeta, String> {
     let target = entry_in_vault(&app, &path)?;
     let cleaned = dedupe(tags.iter().map(|t| clean_tag(t)).collect());
     let meta = rewrite_meta(&target, Some(cleaned), None)?;
-    vault_git::record(&app, vault_dir(&app)?, format!("Tag {}", meta.name), true);
+    let dir = vault_dir(&app)?;
+    vault_git::record(&app, dir.clone(), format!("Tag {}", meta.name), true);
+    let active = collect_active_tags(&dir);
+    vault_git::sync_tag_branches(&app, dir, active);
     Ok(meta)
 }
 
@@ -454,7 +506,8 @@ pub fn run() {
             // Anything written outside the app, or a push that failed last time, goes out now.
             // Only problems are reported: a quiet launch should stay quiet.
             if let Ok(vault) = vault_dir(app.handle()) {
-                vault_git::record(app.handle(), vault, "Sync vault".into(), false);
+                vault_git::record(app.handle(), vault.clone(), "Sync vault".into(), false);
+                vault_git::start_background_sync(app.handle().clone(), vault);
             }
             Ok(())
         })
@@ -463,9 +516,11 @@ pub fn run() {
             set_vault,
             get_remote,
             set_remote,
+            resync_vault,
             list_entries,
             read_entry,
             commit_entry,
+            delete_entry,
             set_tags,
             link_entries,
             unlink_entries,
@@ -621,5 +676,35 @@ mod tests {
         assert!(parse_list("[]").is_empty());
         assert_eq!(parse_list("[a, b]"), vec!["a".to_string(), "b".to_string()]);
         assert_eq!(render_list(&["a".into(), "b".into()]), "[a, b]");
+    }
+
+    #[test]
+    fn reciprocal_links_are_cleaned_up_on_entry_removal() {
+        let dir = std::env::temp_dir().join(format!("ff-del-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let a_path = dir.join("2026-09-21-000001.md");
+        let b_path = dir.join("2026-09-21-000002.md");
+        let na = stem_of(&a_path);
+        let nb = stem_of(&b_path);
+
+        fs::write(&a_path, format!("---\ncreated: x\ntags: []\nlinks: [{}]\n---\n\nEntry A\n", nb)).unwrap();
+        fs::write(&b_path, format!("---\ncreated: x\ntags: []\nlinks: [{}]\n---\n\nEntry B\n", na)).unwrap();
+
+        // Simulate deleting A:
+        for other in collect_entries(&dir) {
+            if other.name != na && other.links.contains(&na) {
+                let p = PathBuf::from(&other.path);
+                let _ = remove_link(&p, &na);
+            }
+        }
+        fs::remove_file(&a_path).unwrap();
+
+        assert!(!a_path.exists());
+        let b_meta = meta_from(&b_path, &fs::read_to_string(&b_path).unwrap());
+        assert!(b_meta.links.is_empty(), "Entry B's reciprocal link to A must be removed");
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -65,6 +65,9 @@ const remoteUrlInput = el<HTMLInputElement>("remote-url");
 
 // Touch stand-ins for the ⌘-chords; hidden by CSS unless the device is touch-primary.
 const touchTags = el<HTMLButtonElement>("touch-tags");
+const touchResync = el<HTMLButtonElement>("touch-resync");
+const touchDelete = el<HTMLButtonElement>("touch-delete");
+const remoteSyncNow = el<HTMLButtonElement>("remote-sync-now");
 
 const win = getCurrentWindow();
 
@@ -183,6 +186,33 @@ listen<SyncStatus>("sync-status", (event) => {
 }).catch(() => {
   /* not running inside the app shell; nothing to report */
 });
+
+listen("vault-updated", async () => {
+  try {
+    entries = await invoke<EntryMeta[]>("list_entries");
+    if (mode === "picker") {
+      renderPicker();
+    } else if (mode === "reader" && current) {
+      const exists = entries.some((e) => e.path === current?.meta.path);
+      if (exists) {
+        await openEntry(current.meta.path, false);
+      } else {
+        leaveReader();
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}).catch(() => {});
+
+async function resync() {
+  hud("syncing…");
+  try {
+    await invoke("resync_vault");
+  } catch (e) {
+    hud(String(e));
+  }
+}
 
 // ---------------------------------------------------------------- commit
 
@@ -364,6 +394,36 @@ async function unlinkSelected() {
     await invoke("unlink_entries", { a: path, b: target.path });
     await openEntry(path, false);
     hud("unlinked");
+  } catch (e) {
+    hud(String(e));
+  }
+}
+
+// ---------------------------------------------------------------- delete
+
+let deleteConfirmTimer = 0;
+let deletePending = false;
+
+async function deleteCurrentEntry() {
+  if (!current) return;
+  if (!deletePending) {
+    deletePending = true;
+    hud("delete? tap or press 'd' again to confirm", 3000);
+    clearTimeout(deleteConfirmTimer);
+    deleteConfirmTimer = window.setTimeout(() => {
+      deletePending = false;
+    }, 3000);
+    return;
+  }
+
+  deletePending = false;
+  clearTimeout(deleteConfirmTimer);
+  const path = current.meta.path;
+  try {
+    await invoke("delete_entry", { path });
+    entries = entries.filter((e) => e.path !== path);
+    hud("reverted · entry deleted");
+    leaveReader();
   } catch (e) {
     hud(String(e));
   }
@@ -612,6 +672,12 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  if (mod && e.key.toLowerCase() === "r" && !e.shiftKey) {
+    e.preventDefault();
+    resync();
+    return;
+  }
+
   if (mode === "setup" || mode === "remote") return;
 
   if (mod && e.key.toLowerCase() === "o") {
@@ -652,6 +718,9 @@ document.addEventListener("keydown", (e) => {
     } else if (key === "l") {
       e.preventDefault();
       beginLink();
+    } else if (key === "d") {
+      e.preventDefault();
+      deleteCurrentEntry();
     } else if (key === "x") {
       e.preventDefault();
       unlinkSelected();
@@ -711,6 +780,7 @@ el<HTMLButtonElement>("setup-pick").addEventListener("click", chooseVault);
 
 el<HTMLButtonElement>("remote-save").addEventListener("click", saveRemote);
 el<HTMLButtonElement>("remote-cancel").addEventListener("click", () => show("write"));
+remoteSyncNow.addEventListener("click", resync);
 
 el<HTMLButtonElement>("touch-commit").addEventListener("click", commit);
 el<HTMLButtonElement>("touch-entries").addEventListener("click", () => {
@@ -718,11 +788,22 @@ el<HTMLButtonElement>("touch-entries").addEventListener("click", () => {
   openPicker();
 });
 el<HTMLButtonElement>("touch-remote").addEventListener("click", openRemote);
+touchResync.addEventListener("click", resync);
+touchDelete.addEventListener("click", deleteCurrentEntry);
 touchTags.addEventListener("click", () => (tagEditing ? saveTags() : beginTagEdit()));
 el<HTMLButtonElement>("touch-link").addEventListener("click", beginLink);
 el<HTMLButtonElement>("touch-reader-back").addEventListener("click", leaveReader);
 el<HTMLButtonElement>("touch-sort").addEventListener("click", cycleSort);
 el<HTMLButtonElement>("touch-picker-close").addEventListener("click", leavePicker);
+
+window.addEventListener("focus", () => {
+  invoke("resync_vault").catch(() => {});
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    invoke("resync_vault").catch(() => {});
+  }
+});
 
 window.addEventListener("resize", scheduleFit);
 

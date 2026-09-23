@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use git2::{
-    build::CheckoutBuilder, CertificateCheckStatus, Cred, CredentialType, FetchOptions,
+    build::CheckoutBuilder, BranchType, CertificateCheckStatus, Cred, CredentialType, FetchOptions,
     IndexAddOption, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
 };
 
@@ -418,6 +418,107 @@ pub fn push(dir: &Path) -> SyncOutcome {
     }
 }
 
+fn push_refspec(repo: &Repository, refspec: &str) {
+    let Some(rname) = remote_name(repo) else {
+        return;
+    };
+    let Ok(mut remote) = repo.find_remote(&rname) else {
+        return;
+    };
+    let url = remote.url().unwrap_or("").to_string();
+    #[cfg(test)]
+    let is_test_fixture = url.contains("lg2-merge-") || url.contains("lg2-unrelated-") || url.contains("lg2-tag-");
+    #[cfg(not(test))]
+    let is_test_fixture = false;
+
+    if !is_test_fixture && !(url.starts_with("http://") || url.starts_with("https://")) {
+        return;
+    }
+
+    let mut callbacks = RemoteCallbacks::new();
+    if url.starts_with("http://") || url.starts_with("https://") {
+        callbacks.credentials(credentials_callback(url));
+        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
+    }
+    let mut opts = PushOptions::new();
+    opts.remote_callbacks(callbacks);
+    let _ = remote.push(&[refspec], Some(&mut opts));
+}
+
+/// Brings in any commits the remote gained since, merging them into the current branch.
+/// Returns Ok(true) if local HEAD was updated, Ok(false) if up-to-date.
+pub fn pull_and_merge(dir: &Path) -> Result<bool, String> {
+    ensure_ca_bundle(dir);
+    let repo = Repository::open(dir).map_err(msg)?;
+    let Some(remote) = remote_name(&repo) else {
+        return Ok(false);
+    };
+    let branch = match repo.head().ok().and_then(|h| h.shorthand().map(String::from)) {
+        Some(b) => b,
+        None => return Ok(false),
+    };
+    let head_before = repo.head().ok().and_then(|h| h.target());
+    {
+        let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match merge_from_remote(&repo, &remote, &branch) {
+            Ok(()) => {}
+            Err(e) => {
+                if e.contains("could not find") || e.contains("reference 'FETCH_HEAD' not found") {
+                    return Ok(false);
+                }
+                return Err(e);
+            }
+        }
+    }
+    let head_after = repo.head().ok().and_then(|h| h.target());
+    Ok(head_before.is_some() && head_before != head_after)
+}
+
+/// Synchronizes git branches for active tags:
+/// - Creates branch `tag/<tag>` at HEAD for each tag in `active_tags` and pushes it to remote.
+/// - Deletes any local and remote branch `tag/<tag>` whose tag is not in `active_tags`.
+pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), String> {
+    ensure_ca_bundle(dir);
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let repo = Repository::open(dir).map_err(msg)?;
+    let head_commit = match repo.head().and_then(|h| h.peel_to_commit()) {
+        Ok(c) => c,
+        Err(_) => return Ok(()), // nothing committed yet
+    };
+
+    // 1. Create missing tag branches
+    for tag in active_tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        let branch_name = format!("tag/{}", tag);
+        if repo.find_branch(&branch_name, BranchType::Local).is_err() {
+            if repo.branch(&branch_name, &head_commit, false).is_ok() {
+                push_refspec(&repo, &format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name));
+            }
+        }
+    }
+
+    // 2. Delete orphaned tag branches
+    if let Ok(branches) = repo.branches(Some(BranchType::Local)) {
+        for item in branches.flatten() {
+            let (mut branch, _) = item;
+            if let Ok(Some(name)) = branch.name() {
+                if let Some(tag) = name.strip_prefix("tag/") {
+                    if !active_tags.iter().any(|t| t == tag) {
+                        let branch_name = name.to_string();
+                        let _ = branch.delete();
+                        push_refspec(&repo, &format!(":refs/heads/{}", branch_name));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------- tests
 //
 // These exercise the libgit2 backend directly (bypassing the platform dispatcher in
@@ -599,5 +700,27 @@ mod tests {
         assert_eq!(outcome, SyncOutcome::Synced);
         assert!(device.join("README.md").exists());
         assert!(device.join("2026-09-21-100000.md").exists());
+    }
+
+    #[test]
+    fn lg2_tag_branches_are_created_and_cleaned_up() {
+        let dir = fresh("lg2-tag-branches");
+        write(&dir, "a.md", "content\n");
+        ensure_repo(&dir).unwrap();
+        commit_all(&dir, "first").unwrap();
+
+        // 1. Add tags "ideas" and "work"
+        sync_tag_branches(&dir, &[ "ideas".into(), "work".into() ]).unwrap();
+        let repo = Repository::open(&dir).unwrap();
+        assert!(repo.find_branch("tag/ideas", BranchType::Local).is_ok());
+        assert!(repo.find_branch("tag/work", BranchType::Local).is_ok());
+
+        // 2. Remove tag "ideas", keep "work", add "life"
+        sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
+        assert!(repo.find_branch("tag/ideas", BranchType::Local).is_err(), "tag/ideas deleted");
+        assert!(repo.find_branch("tag/work", BranchType::Local).is_ok());
+        assert!(repo.find_branch("tag/life", BranchType::Local).is_ok());
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

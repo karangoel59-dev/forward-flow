@@ -30,7 +30,8 @@
       <!-- a phone has no ⌘: touch-only stand-ins for ⌘O, ⌘⇧G and ⌘↵ -->
       <nav class="touchbar touchbar-top">
         <button id="touch-entries" type="button">entries</button>
-        <button id="touch-remote" type="button">sync</button>
+        <button id="touch-resync" type="button">sync</button>
+        <button id="touch-remote" type="button">remote</button>
         <button id="touch-commit" type="button">commit</button>
       </nav>
     </main>
@@ -64,13 +65,15 @@
         <nav class="touchbar touchbar-inline">
           <button id="touch-tags" type="button">tags</button>
           <button id="touch-link" type="button">link</button>
+          <button id="touch-delete" type="button">delete</button>
           <button id="touch-reader-back" type="button">back</button>
         </nav>
 
         <footer class="reader-foot hint">
           <span class="keys-only">t tags</span><span class="keys-only">l link</span>
           <span class="keys-only">↑↓ related</span><span class="keys-only">⏎ open</span>
-          <span class="keys-only">x unlink</span><span class="keys-only">esc back</span>
+          <span class="keys-only">d delete</span><span class="keys-only">x unlink</span>
+          <span class="keys-only">esc back</span>
         </footer>
       </article>
     </section>
@@ -89,7 +92,7 @@
         <ul id="picker-list"></ul>
         <footer class="picker-foot hint">
           <span class="keys-only">↑↓ move</span><span class="keys-only">⏎ open</span>
-          <span class="keys-only">⌘T sort</span>
+          <span class="keys-only">⌘T sort</span><span class="keys-only">⌘R sync</span>
           <span id="sort-label"></span><span class="keys-only">esc close</span>
         </footer>
 
@@ -119,6 +122,7 @@
         </p>
         <div class="remote-actions">
           <button id="remote-save" class="ghost-btn" type="button">Save</button>
+          <button id="remote-sync-now" class="ghost-btn" type="button">Sync now</button>
           <button id="remote-cancel" class="ghost-btn" type="button">Cancel</button>
         </div>
       </div>

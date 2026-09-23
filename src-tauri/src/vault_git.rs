@@ -132,6 +132,52 @@ pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> 
     Ok(())
 }
 
+/// Pulls and merges remote changes into the vault, then pushes any local commits.
+/// Emits "vault-updated" event if remote changes were pulled into the working tree.
+pub fn sync_vault<R: Runtime>(app: &AppHandle<R>, dir: &std::path::Path, announce: bool) -> Result<bool, String> {
+    backend::ensure_repo(dir)?;
+    let updated = backend::pull_and_merge(dir).unwrap_or(false);
+    let outcome = backend::push(dir);
+    match outcome {
+        SyncOutcome::Synced if announce => emit(app, "synced", String::new()),
+        SyncOutcome::Offline(detail) => emit(app, "offline", detail),
+        SyncOutcome::Failed(detail) => emit(app, "error", detail),
+        _ => {}
+    }
+    if updated {
+        let _ = app.emit("vault-updated", ());
+    }
+    Ok(updated)
+}
+
+/// Triggers an immediate sync in a background thread.
+pub fn sync_now<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, announce: bool) {
+    let app = app.clone();
+    thread::spawn(move || {
+        let _ = sync_vault(&app, &dir, announce);
+    });
+}
+
+/// Spawns a background timer to periodically auto-sync every 60 seconds if a remote exists.
+pub fn start_background_sync<R: Runtime>(app: AppHandle<R>, dir: PathBuf) {
+    thread::spawn(move || loop {
+        thread::sleep(std::time::Duration::from_secs(60));
+        if backend::get_remote(&dir).is_some() {
+            let _ = sync_vault(&app, &dir, false);
+        }
+    });
+}
+
+/// Synchronizes git branches for active tags.
+pub fn sync_tag_branches<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, active_tags: Vec<String>) {
+    let app = app.clone();
+    thread::spawn(move || {
+        if let Err(e) = backend::sync_tag_branches(&dir, &active_tags) {
+            emit(&app, "error", format!("Branch sync failed: {}", e));
+        }
+    });
+}
+
 // ---------------------------------------------------------------- tests
 //
 // These exercise the background queue (record -> commit -> push -> status event) through
