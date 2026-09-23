@@ -42,6 +42,7 @@ const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as
 const setup = el<HTMLElement>("setup");
 const writeView = el<HTMLElement>("write");
 const editor = el<HTMLTextAreaElement>("editor");
+const writeCount = el<HTMLElement>("write-count");
 
 const reader = el<HTMLElement>("reader");
 const readerDate = el<HTMLElement>("reader-date");
@@ -98,39 +99,99 @@ function hud(msg: string, ms = 1900) {
 
 const MAX_PX = 34;
 const MIN_PX = 17;
+let currentFontSize = MAX_PX;
+let prevTextLength = 0;
 let rafId = 0;
+let pendingForce = false;
+
+function countWords(str: string): number {
+  const matches = str.match(/\S+/g);
+  return matches ? matches.length : 0;
+}
+
+function updateLiveCount() {
+  const text = editor.value.trim();
+  if (!text) {
+    writeCount.hidden = true;
+    writeCount.textContent = "";
+    return;
+  }
+  const count = countWords(text);
+  writeCount.textContent = `${count} ${count === 1 ? "word" : "words"}`;
+  writeCount.hidden = false;
+}
 
 /** Largest font size (within bounds) at which the draft still fits unscrolled. */
-function fit() {
-  editor.style.fontSize = `${MAX_PX}px`;
-  if (editor.scrollHeight <= editor.clientHeight) return;
+function fit(force = false) {
+  if (editor.clientHeight === 0) return;
 
-  let lo = MIN_PX;
-  let hi = MAX_PX;
-  let best = MIN_PX;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    editor.style.fontSize = `${mid}px`;
-    if (editor.scrollHeight <= editor.clientHeight) {
-      best = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
+  const text = editor.value;
+  const isTypingForward = !force && text.length >= prevTextLength;
+  prevTextLength = text.length;
+
+  if (!text.trim()) {
+    currentFontSize = MAX_PX;
+    editor.style.fontSize = `${MAX_PX}px`;
+    return;
   }
-  editor.style.fontSize = `${best}px`;
+
+  if (isTypingForward) {
+    // If text already fits at current font size, do nothing.
+    // Prevents jitter, reflows, and zoom oscillation on spaces and characters.
+    editor.style.fontSize = `${currentFontSize}px`;
+    if (editor.scrollHeight <= editor.clientHeight) {
+      return;
+    }
+
+    // Overflowed at currentFontSize; monotonically shrink down
+    let lo = MIN_PX;
+    let hi = currentFontSize - 1;
+    let best = MIN_PX;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      editor.style.fontSize = `${mid}px`;
+      if (editor.scrollHeight <= editor.clientHeight) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    currentFontSize = best;
+    editor.style.fontSize = `${currentFontSize}px`;
+  } else {
+    // Force recalculate or text deleted (backspace / cut / selection delete)
+    let lo = MIN_PX;
+    let hi = MAX_PX;
+    let best = MIN_PX;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      editor.style.fontSize = `${mid}px`;
+      if (editor.scrollHeight <= editor.clientHeight) {
+        best = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    currentFontSize = best;
+    editor.style.fontSize = `${currentFontSize}px`;
+  }
 
   // Past the floor the page scrolls instead; keep the live line in view.
-  if (best === MIN_PX && editor.scrollHeight > editor.clientHeight) {
+  if (currentFontSize === MIN_PX && editor.scrollHeight > editor.clientHeight) {
     editor.scrollTop = editor.scrollHeight;
   }
 }
 
-function scheduleFit() {
+function scheduleFit(force = false) {
+  if (force) pendingForce = true;
   if (rafId) return;
   rafId = requestAnimationFrame(() => {
     rafId = 0;
-    fit();
+    const f = pendingForce;
+    pendingForce = false;
+    fit(f);
   });
 }
 
@@ -156,7 +217,8 @@ function show(next: Mode) {
 
   if (next === "write") {
     editor.focus();
-    scheduleFit();
+    updateLiveCount();
+    scheduleFit(true);
   } else if (next === "picker") {
     pickerFilter.focus();
   } else if (next === "remote") {
@@ -228,8 +290,11 @@ async function commit() {
     editor.classList.add("committing");
     window.setTimeout(() => {
       editor.value = "";
+      prevTextLength = 0;
+      currentFontSize = MAX_PX;
+      updateLiveCount();
       editor.classList.remove("committing");
-      fit();
+      fit(true);
       editor.focus();
       committing = false;
     }, 260);
@@ -766,7 +831,22 @@ document.addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- wire-up
 
+editor.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    if (!document.execCommand("insertText", false, "  ")) {
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      const val = editor.value;
+      editor.value = val.substring(0, start) + "  " + val.substring(end);
+      editor.selectionStart = editor.selectionEnd = start + 2;
+      editor.dispatchEvent(new Event("input"));
+    }
+  }
+});
+
 editor.addEventListener("input", () => {
+  updateLiveCount();
   scheduleFit();
   scheduleDraftSave();
 });
@@ -805,7 +885,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-window.addEventListener("resize", scheduleFit);
+window.addEventListener("resize", () => scheduleFit(true));
 
 // Keep focus on the page: clicking anywhere in write mode returns to the caret.
 // The touch controls are the exception — swallowing their mousedown would stop
@@ -835,6 +915,8 @@ async function boot() {
     const draft = await invoke<string>("load_draft");
     if (draft.trim()) {
       editor.value = draft;
+      prevTextLength = draft.length;
+      updateLiveCount();
       hud("draft restored");
     }
   } catch {
@@ -842,7 +924,7 @@ async function boot() {
   }
 
   show("write");
-  fit();
+  fit(true);
 }
 
 boot();

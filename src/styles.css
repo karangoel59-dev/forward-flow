@@ -79,9 +79,26 @@ body {
   font-size: 2rem; /* JS overrides: autosizes to fit */
   line-height: 1.55;
   overflow-y: auto;
+  padding-bottom: 35vh;
   -webkit-user-select: text;
   user-select: text;
-  transition: font-size 90ms ease-out;
+}
+
+.write-count {
+  position: fixed;
+  bottom: max(1.2rem, env(safe-area-inset-bottom));
+  left: max(1.5rem, env(safe-area-inset-left));
+  opacity: 0.55;
+  pointer-events: none;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  transition: opacity 180ms ease-out;
+}
+
+.write-count[hidden] {
+  opacity: 0;
+  display: block;
+  visibility: hidden;
 }
 
 #editor::placeholder {
