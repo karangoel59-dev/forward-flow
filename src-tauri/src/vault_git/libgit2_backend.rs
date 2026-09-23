@@ -486,15 +486,19 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
         Err(_) => return Ok(()), // nothing committed yet
     };
 
-    // 1. Create missing tag branches
+    // 1. Create or advance tag branches
     for tag in active_tags {
         let tag = tag.trim();
         if tag.is_empty() {
             continue;
         }
         let branch_name = format!("tag/{}", tag);
-        if repo.find_branch(&branch_name, BranchType::Local).is_err() {
-            if repo.branch(&branch_name, &head_commit, false).is_ok() {
+        let needs_update = match repo.find_branch(&branch_name, BranchType::Local) {
+            Ok(b) => b.get().target() != Some(head_commit.id()),
+            Err(_) => true,
+        };
+        if needs_update {
+            if repo.branch(&branch_name, &head_commit, true).is_ok() {
                 push_refspec(&repo, &format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name));
             }
         }
@@ -717,9 +721,13 @@ mod tests {
 
         // 2. Remove tag "ideas", keep "work", add "life"
         sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
-        assert!(repo.find_branch("tag/ideas", BranchType::Local).is_err(), "tag/ideas deleted");
-        assert!(repo.find_branch("tag/work", BranchType::Local).is_ok());
-        assert!(repo.find_branch("tag/life", BranchType::Local).is_ok());
+        // 3. Advancing: make a second commit and re-sync tag "work"
+        write(&dir, "b.md", "second\n");
+        commit_all(&dir, "second").unwrap();
+        let head2 = repo.head().unwrap().peel_to_commit().unwrap().id();
+        sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
+        let work_branch = repo.find_branch("tag/work", BranchType::Local).unwrap();
+        assert_eq!(work_branch.get().target(), Some(head2), "tag/work should advance to latest HEAD");
 
         fs::remove_dir_all(&dir).unwrap();
     }

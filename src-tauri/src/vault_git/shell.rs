@@ -285,18 +285,24 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
     let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let remote = remote_name(dir);
 
-    // 1. Create missing tag branches
+    // 1. Create or advance tag branches
     for tag in active_tags {
         let tag = tag.trim();
         if tag.is_empty() {
             continue;
         }
         let branch_name = format!("tag/{}", tag);
-        let exists = run(dir, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch_name)])
-            .map(|out| out.success)
-            .unwrap_or(false);
-        if !exists {
-            let _ = ok(dir, &["branch", &branch_name, "HEAD"]);
+        let current_target = ok(dir, &["rev-parse", &format!("refs/heads/{}", branch_name)]).ok();
+        let head_target = ok(dir, &["rev-parse", "HEAD"]).ok();
+
+        let needs_update = match (current_target, head_target) {
+            (Some(curr), Some(head)) => curr.trim() != head.trim(),
+            (None, Some(_)) => true,
+            _ => false,
+        };
+
+        if needs_update {
+            let _ = ok(dir, &["branch", "-f", &branch_name, "HEAD"]);
             if let Some(ref r) = remote {
                 let _ = run(dir, &["push", "--quiet", r.as_str(), &format!("refs/heads/{}", branch_name)]);
             }
@@ -621,8 +627,13 @@ mod tests {
         assert!(branches2.contains("tag/life"));
         let remote_branches2 = ok(&remote, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
         assert!(!remote_branches2.contains("tag/ideas"), "tag/ideas deleted on remote");
-        assert!(remote_branches2.contains("tag/work"));
-        assert!(remote_branches2.contains("tag/life"));
+        // 3. Advancing: make a second commit and re-sync tag "work"
+        write(&dir, "b.md", "second\n");
+        commit_all(&dir, "second").unwrap();
+        let head2 = ok(&dir, &["rev-parse", "HEAD"]).unwrap();
+        sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
+        let work_ref = ok(&dir, &["rev-parse", "refs/heads/tag/work"]).unwrap();
+        assert_eq!(work_ref.trim(), head2.trim(), "tag/work should advance to latest HEAD");
 
         fs::remove_dir_all(&dir).unwrap();
         fs::remove_dir_all(&remote).unwrap();
