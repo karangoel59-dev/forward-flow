@@ -35,6 +35,7 @@ body {
   font-family: var(--serif);
   -webkit-font-smoothing: antialiased;
   caret-color: var(--accent);
+  text-rendering: optimizeLegibility;
 }
 
 /* nothing is selectable by default; the reader opts back in */
@@ -43,8 +44,33 @@ body {
   user-select: none;
 }
 
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--ink);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--dim) 25%, transparent) transparent;
+}
+
 ::-webkit-scrollbar {
-  display: none;
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--dim) 25%, transparent);
+  border-radius: 999px;
+  transition: background 150ms ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 
 .dim,
@@ -88,15 +114,24 @@ body {
   position: fixed;
   bottom: max(1.2rem, env(safe-area-inset-bottom));
   left: max(1.5rem, env(safe-area-inset-left));
-  opacity: 0.55;
+  opacity: 0.65;
   pointer-events: none;
-  font-size: 0.8rem;
-  letter-spacing: 0.05em;
-  transition: opacity 180ms ease-out;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  padding: 0.22rem 0.65rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dim) 18%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: opacity 200ms ease, transform 200ms ease;
+  user-select: none;
 }
 
 .write-count[hidden] {
   opacity: 0;
+  transform: translateY(4px);
   display: block;
   visibility: hidden;
 }
@@ -118,11 +153,13 @@ body {
   position: fixed;
   inset: 0;
   z-index: 10;
-  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(28px) saturate(150%);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
   display: flex;
   justify-content: center;
   padding: var(--gutter) 1.5rem;
-  animation: rise 140ms ease-out;
+  animation: rise 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .veil[hidden] {
@@ -132,7 +169,7 @@ body {
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
 }
 
@@ -152,18 +189,27 @@ body {
 
 .ghost-btn {
   font: inherit;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   color: var(--ink);
-  background: transparent;
-  border: 1px solid var(--dim);
-  border-radius: 2px;
-  padding: 0.5rem 1.4rem;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dim) 40%, transparent);
+  border-radius: 8px;
+  padding: 0.55rem 1.3rem;
   cursor: pointer;
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .ghost-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ghost-btn:active {
+  transform: translateY(0);
 }
 
 /* remote */
@@ -180,7 +226,7 @@ body {
 #remote-url {
   width: 100%;
   border: 0;
-  border-bottom: 1px solid var(--dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--dim) 40%, transparent);
   outline: 0;
   background: transparent;
   color: inherit;
@@ -190,6 +236,7 @@ body {
   padding-bottom: 0.6rem;
   -webkit-user-select: text;
   user-select: text;
+  transition: border-bottom-color 180ms ease;
 }
 
 #remote-url:focus {
@@ -249,7 +296,7 @@ body {
 #picker-filter {
   width: 100%;
   border: 0;
-  border-bottom: 1px solid var(--dim);
+  border-bottom: 1px solid color-mix(in srgb, var(--dim) 40%, transparent);
   outline: 0;
   background: transparent;
   color: inherit;
@@ -258,6 +305,11 @@ body {
   padding-bottom: 0.6rem;
   -webkit-user-select: text;
   user-select: text;
+  transition: border-bottom-color 180ms ease;
+}
+
+#picker-filter:focus {
+  border-bottom-color: var(--accent);
 }
 
 #picker-filter::placeholder {
@@ -273,14 +325,20 @@ body {
 }
 
 #picker-list li {
-  padding: 0.6rem 0.75rem;
+  padding: 0.65rem 0.85rem;
   border-left: 2px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+#picker-list li:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 #picker-list li.on {
   border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .row-top {
@@ -291,6 +349,7 @@ body {
   font-size: 0.8rem;
   letter-spacing: 0.06em;
   color: var(--dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .row-preview {
@@ -313,23 +372,65 @@ body {
   flex-wrap: wrap;
 }
 
-/* ----------------------------------------------------------- hud */
+/* ----------------------------------------------------------- hud & hints */
+
+kbd {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.16rem 0.38rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--dim) 30%, transparent);
+  color: var(--ink);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+  letter-spacing: 0.02em;
+  display: inline-block;
+}
+
+.keys-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+#sort-label {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.5rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
 
 #hud {
   position: fixed;
-  bottom: 1.5rem;
-  left: 0;
-  right: 0;
-  text-align: center;
+  bottom: max(1.8rem, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  padding: 0.45rem 1.2rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 80%, var(--ink) 20%);
+  border: 1px solid color-mix(in srgb, var(--dim) 25%, transparent);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  color: var(--ink);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 500ms ease-out;
-  z-index: 20;
+  transition: opacity 300ms ease, transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 30;
+  white-space: nowrap;
 }
 
 #hud.show {
   opacity: 1;
-  transition: opacity 90ms ease-out;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ----------------------------------------------------- phase 2: viewer */
@@ -358,12 +459,19 @@ body {
 }
 
 .tag {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   letter-spacing: 0.06em;
   color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 999px;
-  padding: 0.12rem 0.6rem;
+  padding: 0.15rem 0.65rem;
+  transition: all 140ms ease;
+}
+
+.tag:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--accent);
 }
 
 .tag-input {
@@ -379,6 +487,7 @@ body {
   margin: -1.25rem 0 1.75rem;
   -webkit-user-select: text;
   user-select: text;
+  transition: border-bottom-color 180ms ease;
 }
 
 .tag-input[hidden] {
@@ -407,14 +516,20 @@ body {
 }
 
 .related li {
-  padding: 0.5rem 0.75rem;
+  padding: 0.55rem 0.85rem;
   border-left: 2px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.related li:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .related li.on {
   border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 #reader-body {
@@ -494,13 +609,18 @@ body {
   color: var(--accent);
 }
 
-/* Writing: pinned out of the way, and above the soft keyboard rather than
-   behind it like a bottom bar would be. */
 :root.touch .touchbar-top {
   position: fixed;
-  top: max(0.5rem, env(safe-area-inset-top));
+  top: max(0.6rem, env(safe-area-inset-top));
   right: max(0.9rem, env(safe-area-inset-right));
   z-index: 15;
+  background: color-mix(in srgb, var(--paper) 80%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid color-mix(in srgb, var(--dim) 22%, transparent);
+  border-radius: 999px;
+  padding: 0.15rem 0.85rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 :root.touch .touchbar-inline {
