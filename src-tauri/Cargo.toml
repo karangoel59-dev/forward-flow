@@ -24,6 +24,7 @@ chrono = "0.4"
 
 # Compile libgit2 on desktop too for local type checks and tests.
 git2 = { version = "0.19", default-features = false }
+tauri-plugin-opener = "=2.5.3"
 
 # Android embeds libgit2 and OpenSSL for HTTP(S) sync without system libraries.
 [target.'cfg(target_os = "android")'.dependencies]

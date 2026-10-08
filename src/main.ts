@@ -1,3 +1,5 @@
+import { renderMarkdown, externalMarkdownUrl } from "./markdown";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -460,7 +462,7 @@ async function openEntry(path: string, remember = true) {
     tagInput.hidden = true;
     readerDate.textContent = formatDate(full.meta.created);
     readerCount.textContent = `${full.meta.words} words`;
-    readerBody.textContent = full.body.trim();
+    readerBody.innerHTML = renderMarkdown(full.body);
     renderTags();
     renderRelated();
     reader.querySelector<HTMLElement>(".reader-inner")!.scrollTop = 0;
@@ -947,6 +949,15 @@ editor.addEventListener("input", () => {
 pickerFilter.addEventListener("input", () => {
   cursor = 0;
   renderPicker();
+});
+
+readerBody.addEventListener("click", (event) => {
+  const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+  if (!anchor) return;
+  event.preventDefault();
+  const url = externalMarkdownUrl(anchor.getAttribute("href") ?? "");
+  if (url) openUrl(url).catch(e => hud(String(e)));
+  else hud("Use a full http, https, or mailto link.");
 });
 
 el<HTMLButtonElement>("write-new-notebook").addEventListener("click", beginNotebook);

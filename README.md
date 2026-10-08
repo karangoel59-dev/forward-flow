@@ -46,6 +46,14 @@ Inside an open entry:
 In the viewer's filter box, a query starting with `#` matches tags only;
 anything else matches date, prose and tags together.
 
+## Markdown
+
+Write Markdown directly in the editor. Saved entries render headings, emphasis,
+lists, blockquotes, links, images, tables, and fenced code blocks in the reader.
+Links with full HTTP, HTTPS, or mailto URLs open in your default browser or mail
+app. HTML is sanitized before display. The editor remains plain text and files
+keep their Markdown source; rendering never rewrites your prose.
+
 ## Notebooks
 
 Create a notebook with **+ New notebook** on the writing page or in the archive.

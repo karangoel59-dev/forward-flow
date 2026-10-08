@@ -96,7 +96,7 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
 .tag-row { margin-bottom: 2rem; }
 .tag-row:empty { display: none; }
 .tag-input { margin-bottom: 1.5rem; }
-#reader-body { font-size: 1.4rem; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; padding: 0.5rem 0 2.5rem; }
+#reader-body { font-size: 1.4rem; line-height: 1.85; overflow-wrap: anywhere; padding: 0.5rem 0 2.5rem; }
 .related { border-top: 1px solid var(--line); padding: 1.5rem 0; }
 .section-label { color: var(--dim); font: 0.7rem/1.5 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.75rem; }
 .related ul { list-style: none; }
@@ -138,3 +138,24 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
 #notebook-name { width: 100%; padding: 0.9rem 1rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; font: 0.9rem/1.5 var(--sans); }
 #notebook-error:empty { display: none; }
 #notebook-create { background: var(--accent); color: var(--surface); }
+
+#reader-body > :first-child { margin-top: 0; }
+#reader-body > :last-child { margin-bottom: 0; }
+#reader-body p, #reader-body ul, #reader-body ol, #reader-body pre, #reader-body blockquote, #reader-body table { margin: 0 0 1.2em; }
+#reader-body h1, #reader-body h2, #reader-body h3, #reader-body h4, #reader-body h5, #reader-body h6 { margin: 1.5em 0 0.6em; line-height: 1.3; font-weight: 500; }
+#reader-body h1 { font-size: 1.8em; }
+#reader-body h2 { font-size: 1.5em; }
+#reader-body h3 { font-size: 1.2em; }
+#reader-body h4, #reader-body h5, #reader-body h6 { font-size: 1em; }
+#reader-body ul, #reader-body ol { padding-left: 1.5em; }
+#reader-body li > ul, #reader-body li > ol { margin-bottom: 0; }
+#reader-body blockquote { border-left: 3px solid var(--accent); padding-left: 1em; color: var(--dim); }
+#reader-body a { color: var(--accent); text-underline-offset: 0.2em; }
+#reader-body code { font: 0.8em/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); border-radius: 3px; padding: 0.15em 0.3em; }
+#reader-body pre { overflow-x: auto; padding: 1em; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); white-space: pre; }
+#reader-body pre code { background: transparent; padding: 0; }
+#reader-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 0.85em; }
+#reader-body th, #reader-body td { padding: 0.5em 0.8em; border: 1px solid var(--line); text-align: left; }
+#reader-body th { background: var(--surface); }
+#reader-body hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
+#reader-body img { max-width: 100%; height: auto; }

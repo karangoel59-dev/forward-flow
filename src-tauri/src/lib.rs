@@ -599,6 +599,7 @@ fn load_draft(app: AppHandle) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(all(target_os = "android", feature = "tls-diagnostics"))]
             if let Ok(dir) = app.path().app_data_dir() {

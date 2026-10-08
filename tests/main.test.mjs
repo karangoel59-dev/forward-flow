@@ -47,6 +47,9 @@ function frontend(invoke) {
     getCurrentWindow: () => ({}),
     listen: () => Promise.resolve(),
     invoke,
+    renderMarkdown: body => body,
+    externalMarkdownUrl: () => null,
+    openUrl: async () => {},
   });
   const source = readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8')
     .replace(/^import .*;\n/gm, '')
