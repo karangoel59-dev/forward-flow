@@ -46,6 +46,18 @@ Inside an open entry:
 In the viewer's filter box, a query starting with `#` matches tags only;
 anything else matches date, prose and tags together.
 
+## Notebooks
+
+Create a notebook with **+ New notebook** on the writing page or in the archive.
+Choose a notebook before committing to save your next entry there. Existing
+entries stay in **Inbox**, the vault root. The archive lets you browse **All pages**,
+Inbox, or one notebook; open an entry and use **Move entry** to change its notebook.
+Moving preserves the entry's prose, timestamp, tags, and links across notebooks.
+
+Notebooks are ordinary subfolders of your vault, synced with the entries inside
+them. Empty notebooks contain a `.gitkeep` file so they also sync. Existing nested
+folders are listed as notebooks too. No migration is needed for existing vaults.
+
 ## Syncing
 
 Every commit is pushed to a git remote in the background if one is set —

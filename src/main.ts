@@ -15,6 +15,7 @@ if (
 type EntryMeta = {
   path: string;
   name: string;
+  notebook: string;
   created: string;
   words: number;
   preview: string;
@@ -23,7 +24,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker" | "remote";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -65,6 +66,82 @@ const touchTags = el<HTMLButtonElement>("touch-tags");
 const touchResync = el<HTMLButtonElement>("touch-resync");
 const touchDelete = el<HTMLButtonElement>("touch-delete");
 const remoteSyncNow = el<HTMLButtonElement>("remote-sync-now");
+
+const notebookView = el<HTMLElement>("notebook");
+const notebookName = el<HTMLInputElement>("notebook-name");
+const notebookError = el<HTMLElement>("notebook-error");
+const notebookCreate = el<HTMLButtonElement>("notebook-create");
+const writeNotebook = el<HTMLSelectElement>("write-notebook");
+const pickerNotebook = el<HTMLSelectElement>("picker-notebook");
+const readerNotebook = el<HTMLSelectElement>("reader-notebook");
+let notebookOrigin: Mode = "write";
+let creatingNotebook = false;
+let movingEntry = false;
+
+async function loadNotebooks() {
+  const notebooks = await invoke<string[]>("list_notebooks");
+  for (const select of [writeNotebook, pickerNotebook, readerNotebook]) {
+    const previous = select.value;
+    const options = select === pickerNotebook ? [["*", "All pages"], ["", "Inbox"]] : [["", "Inbox"]];
+    options.push(...notebooks.map(name => [name, name]));
+    select.replaceChildren();
+    for (const [value, label] of options) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      select.append(option);
+    }
+    select.value = options.some(([value]) => value === previous) ? previous : options[0][0];
+  }
+}
+
+function beginNotebook() {
+  notebookOrigin = mode;
+  notebookName.value = "";
+  notebookError.textContent = "";
+  show("notebook");
+}
+
+async function createNotebook() {
+  if (creatingNotebook) return;
+  const name = notebookName.value.trim();
+  if (!name) { notebookError.textContent = "Enter a notebook name."; return; }
+  creatingNotebook = true;
+  notebookCreate.disabled = true;
+  try {
+    const created = await invoke<string>("create_notebook", { name });
+    await loadNotebooks();
+    writeNotebook.value = created;
+    pickerNotebook.value = created;
+    if (notebookOrigin === "picker") await openPicker();
+    else show("write");
+    hud(`notebook created · ${created}`);
+  } catch (e) {
+    notebookError.textContent = String(e);
+  } finally {
+    creatingNotebook = false;
+    notebookCreate.disabled = false;
+  }
+}
+
+async function moveCurrentEntry() {
+  if (!current || movingEntry || readerNotebook.value === current.meta.notebook) return;
+  const path = current.meta.path;
+  movingEntry = true;
+  el<HTMLButtonElement>("reader-move").disabled = true;
+  try {
+    const meta = await invoke<EntryMeta>("move_entry", { path, notebook: readerNotebook.value });
+    entries = entries.map(entry => entry.path === path ? meta : entry);
+    await openEntry(meta.path, false);
+    hud(`moved to ${meta.notebook || "Inbox"}`);
+  } catch (e) {
+    readerNotebook.value = current?.meta.notebook ?? "";
+    hud(String(e));
+  } finally {
+    movingEntry = false;
+    el<HTMLButtonElement>("reader-move").disabled = false;
+  }
+}
 
 const win = getCurrentWindow();
 
@@ -207,6 +284,7 @@ function show(next: Mode) {
   reader.hidden = next !== "reader";
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
+  notebookView.hidden = next !== "notebook";
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
   if (next === "write") {
@@ -215,6 +293,8 @@ function show(next: Mode) {
     scheduleFit(true);
   } else if (next === "picker") {
     pickerFilter.focus();
+  } else if (next === "notebook") {
+    notebookName.focus();
   } else if (next === "remote") {
     remoteUrlInput.focus();
   } else {
@@ -244,12 +324,14 @@ listen<SyncStatus>("sync-status", (event) => {
 listen("vault-updated", async () => {
   try {
     entries = await invoke<EntryMeta[]>("list_entries");
+    await loadNotebooks();
     if (mode === "picker") {
       renderPicker();
     } else if (mode === "reader" && current) {
-      const exists = entries.some((e) => e.path === current?.meta.path);
-      if (exists) {
-        await openEntry(current.meta.path, false);
+      const updated = entries.find((e) => e.path === current?.meta.path)
+        ?? entries.find((e) => e.name === current?.meta.name);
+      if (updated) {
+        await openEntry(updated.path, false);
       } else {
         leaveReader();
       }
@@ -280,7 +362,7 @@ async function commit() {
   editor.readOnly = true;
   clearTimeout(draftTimer);
   try {
-    const meta = await invoke<EntryMeta>("commit_entry", { content: editor.value });
+    const meta = await invoke<EntryMeta>("commit_entry", { content: editor.value, notebook: writeNotebook.value });
     editor.classList.add("committing");
     window.setTimeout(() => {
       editor.value = "";
@@ -372,6 +454,7 @@ async function openEntry(path: string, remember = true) {
     const full = await invoke<EntryFull>("read_entry", { path });
     if (current?.meta.path !== full.meta.path) resetDeleteConfirmation();
     current = full;
+    readerNotebook.value = full.meta.notebook;
     relCursor = 0;
     tagEditing = false;
     tagInput.hidden = true;
@@ -517,7 +600,10 @@ function renderPicker() {
   const raw = pickerFilter.value.trim().toLowerCase();
   let pool = entries;
 
+  pickerNotebook.disabled = !!linkFor;
+  el<HTMLButtonElement>("picker-new-notebook").hidden = !!linkFor;
   if (linkFor) pool = pool.filter((e) => e.path !== linkFor);
+  else if (pickerNotebook.value !== "*") pool = pool.filter(e => (e.notebook || "") === pickerNotebook.value);
 
   if (raw.startsWith("#")) {
     const want = raw.slice(1);
@@ -563,7 +649,10 @@ function renderPicker() {
     const preview = document.createElement("div");
     preview.className = "row-preview";
     preview.textContent = entry.preview || "—";
-    li.append(top, preview);
+    const notebook = document.createElement("div");
+    notebook.className = "row-notebook hint";
+    notebook.textContent = entry.notebook || "Inbox";
+    li.append(top, preview, notebook);
 
     if (entry.tags.length) {
       const tags = document.createElement("div");
@@ -587,6 +676,7 @@ function renderPicker() {
 async function openPicker() {
   try {
     entries = await invoke<EntryMeta[]>("list_entries");
+    await loadNotebooks();
   } catch (e) {
     hud(String(e));
     return;
@@ -635,6 +725,9 @@ async function chooseVault() {
     if (typeof picked !== "string") return;
     await invoke("set_vault", { path: picked });
     entries = [];
+    writeNotebook.value = "";
+    pickerNotebook.value = "*";
+    await loadNotebooks();
     hud("folder set");
     show("write");
   } catch (e) {
@@ -714,7 +807,10 @@ remoteUrlInput.addEventListener("keydown", (e) => {
 document.addEventListener("keydown", (e) => {
   const mod = e.metaKey || e.ctrlKey;
   const typing =
-    e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
+    e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
+
+  if (mode === "notebook") return;
+  if (e.target instanceof HTMLSelectElement && !mod) return;
 
   if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "f") {
     e.preventDefault();
@@ -853,6 +949,14 @@ pickerFilter.addEventListener("input", () => {
   renderPicker();
 });
 
+el<HTMLButtonElement>("write-new-notebook").addEventListener("click", beginNotebook);
+el<HTMLButtonElement>("picker-new-notebook").addEventListener("click", beginNotebook);
+el<HTMLButtonElement>("reader-move").addEventListener("click", moveCurrentEntry);
+el<HTMLElement>("notebook-form").addEventListener("submit", (e) => { e.preventDefault(); createNotebook(); });
+el<HTMLButtonElement>("notebook-cancel").addEventListener("click", () => { if (!creatingNotebook) show(notebookOrigin); });
+notebookName.addEventListener("keydown", (e) => { if (e.key === "Escape" && !creatingNotebook) { e.preventDefault(); show(notebookOrigin); } });
+pickerNotebook.addEventListener("change", () => { cursor = 0; renderPicker(); });
+
 el<HTMLButtonElement>("reader-close").addEventListener("click", leaveReader);
 el<HTMLButtonElement>("picker-close").addEventListener("click", leavePicker);
 
@@ -890,7 +994,7 @@ window.addEventListener("resize", () => scheduleFit(true));
 // Preserve touch-button clicks when returning focus to the editor.
 document.addEventListener("mousedown", (e) => {
   const target = e.target as HTMLElement | null;
-  if (mode === "write" && target !== editor && !target?.closest("button, input, .touchbar")) {
+  if (mode === "write" && target !== editor && !target?.closest("button, input, select, label, .touchbar")) {
     e.preventDefault();
     editor.focus();
   }
@@ -908,6 +1012,10 @@ async function boot() {
     show("setup");
     return;
   }
+
+  try {
+    await loadNotebooks();
+  } catch (e) { hud(String(e)); }
 
   try {
     const draft = await invoke<string>("load_draft");

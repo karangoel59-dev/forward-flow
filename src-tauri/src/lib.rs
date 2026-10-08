@@ -44,6 +44,7 @@ fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {
 struct EntryMeta {
     path: String,
     name: String,
+    notebook: String,
     created: String,
     words: usize,
     preview: String,
@@ -134,6 +135,7 @@ fn meta_from(path: &PathBuf, raw: &str) -> EntryMeta {
         path: path.to_string_lossy().to_string(),
         created: fm_value(&fm, "created").unwrap_or_else(|| name.clone()),
         name,
+        notebook: String::new(),
         words: body.split_whitespace().count(),
         preview,
         tags: fm_value(&fm, "tags").map(|v| parse_list(&v)).unwrap_or_default(),
@@ -142,28 +144,117 @@ fn meta_from(path: &PathBuf, raw: &str) -> EntryMeta {
 }
 
 fn collect_entries(dir: &PathBuf) -> Vec<EntryMeta> {
-    let mut out = Vec::new();
-    let listing = match fs::read_dir(dir) {
-        Ok(l) => l,
-        Err(_) => return out,
-    };
-    for item in listing.flatten() {
-        let path = item.path();
-        let is_md = path.extension().map(|e| e == "md").unwrap_or(false);
-        let hidden = path
-            .file_name()
-            .map(|n| n.to_string_lossy().starts_with('.'))
-            .unwrap_or(true);
-        if !is_md || hidden {
-            continue;
-        }
-        if let Ok(raw) = fs::read_to_string(&path) {
-            out.push(meta_from(&path, &raw));
+    fn visit(root: &PathBuf, dir: &PathBuf, out: &mut Vec<EntryMeta>) {
+        let Ok(listing) = fs::read_dir(dir) else { return; };
+        for item in listing.flatten() {
+            let path = item.path();
+            let Ok(kind) = item.file_type() else { continue; };
+            if kind.is_symlink() || item.file_name().to_string_lossy().starts_with('.') { continue; }
+            if kind.is_dir() { visit(root, &path, out); }
+            else if path.extension().is_some_and(|e| e == "md") {
+                if let Ok(raw) = fs::read_to_string(&path) {
+                    let mut meta = meta_from(&path, &raw);
+                    meta.notebook = path.parent().and_then(|p| p.strip_prefix(root).ok())
+                        .map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                    out.push(meta);
+                }
+            }
         }
     }
-    // Newest first. Filenames are timestamps, so name order == time order.
+    let mut out = Vec::new();
+    let root = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+    visit(&root, &root, &mut out);
     out.sort_by(|a, b| b.name.cmp(&a.name));
     out
+}
+
+fn notebook_dir(root: &PathBuf, notebook: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    if notebook.is_empty() { return root.canonicalize().map_err(|e| e.to_string()); }
+    let relative = PathBuf::from(notebook);
+    if notebook.contains('\\') || relative.components().any(|c| match c {
+        Component::Normal(n) => n.to_string_lossy().starts_with('.'),
+        _ => true,
+    }) { return Err("invalid notebook folder".into()); }
+    let vault = root.canonicalize().map_err(|e| e.to_string())?;
+    let target = vault.join(relative).canonicalize().map_err(|e| e.to_string())?;
+    if !target.starts_with(&vault) || !target.is_dir() { return Err("notebook is outside the vault".into()); }
+    Ok(target)
+}
+
+fn collect_notebooks(root: &PathBuf) -> Result<Vec<String>, String> {
+    fn visit(dir: &PathBuf, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
+        for item in fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+            if item.file_name().to_string_lossy().starts_with('.') { continue; }
+            if item.file_type().map_err(|e| e.to_string())?.is_dir() {
+                let name = format!("{}{}", prefix, item.file_name().to_string_lossy());
+                out.push(name.clone());
+                visit(&item.path(), &format!("{name}/"), out)?;
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    visit(root, "", &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+#[tauri::command]
+fn list_notebooks(app: AppHandle) -> Result<Vec<String>, String> {
+    collect_notebooks(&vault_dir(&app)?)
+}
+
+fn create_notebook_folder(root: &PathBuf, name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('.') || name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
+        return Err("use a notebook name without path separators or special characters".into());
+    }
+    let path = root.join(name);
+    fs::create_dir(&path).map_err(|e| e.to_string())?;
+    // Git needs a file to preserve empty notebooks across devices.
+    if let Err(error) = fs::write(path.join(".gitkeep"), "") {
+        let _ = fs::remove_dir(&path);
+        return Err(error.to_string());
+    }
+    Ok(name.into())
+}
+
+#[tauri::command]
+fn create_notebook(app: AppHandle, name: String) -> Result<String, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let root = vault_dir(&app)?;
+    let name = create_notebook_folder(&root, &name)?;
+    vault_git::record(&app, root, format!("Create notebook {name}"), true);
+    Ok(name)
+}
+
+fn move_entry_file(root: &PathBuf, source: &PathBuf, notebook: &str) -> Result<PathBuf, String> {
+    let vault = root.canonicalize().map_err(|e| e.to_string())?;
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    let relative = source.strip_prefix(&vault).map_err(|_| "entry is outside the vault")?;
+    if !source.is_file() || source.extension().is_none_or(|e| e != "md")
+        || relative.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+        return Err("only markdown entries can be moved".into());
+    }
+    let destination = notebook_dir(root, notebook)?.join(source.file_name().ok_or("invalid entry")?);
+    if destination == source { return Ok(destination); }
+    if destination.exists() { return Err("an entry with this filename already exists in that notebook".into()); }
+    fs::rename(&source, &destination).map_err(|e| e.to_string())?;
+    Ok(destination)
+}
+
+#[tauri::command]
+fn move_entry(app: AppHandle, path: String, notebook: String) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let source = entry_in_vault(&app, &path)?;
+    let root = vault_dir(&app)?;
+    let raw = fs::read_to_string(&source).map_err(|e| e.to_string())?;
+    let destination = move_entry_file(&root, &source, &notebook)?;
+    let mut meta = meta_from(&destination, &raw);
+    meta.notebook = notebook;
+    vault_git::record(&app, root, format!("Move entry {} to notebook {}", meta.name, meta.notebook), true);
+    Ok(meta)
 }
 
 /// Rejects paths that resolve outside the vault.
@@ -296,7 +387,10 @@ fn read_entry(app: AppHandle, path: String) -> Result<EntryFull, String> {
     let target = entry_in_vault(&app, &path)?;
     let raw = fs::read_to_string(&target).map_err(|e| e.to_string())?;
     let (_, body) = split_frontmatter(&raw);
-    let meta = meta_from(&target, &raw);
+    let mut meta = meta_from(&target, &raw);
+    let root = vault_dir(&app)?.canonicalize().map_err(|e| e.to_string())?;
+    meta.notebook = target.parent().and_then(|p| p.strip_prefix(&root).ok())
+        .map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
 
     let all = collect_entries(&vault_dir(&app)?);
     let related = related_to(&all, &meta).into_iter().cloned().collect();
@@ -308,13 +402,27 @@ fn read_entry(app: AppHandle, path: String) -> Result<EntryFull, String> {
     })
 }
 
+fn next_entry_path(root: &PathBuf, entry_dir: &PathBuf, stamp: &str) -> PathBuf {
+    let existing = collect_entries(root);
+    let mut path = entry_dir.join(format!("{stamp}.md"));
+    let mut n = 1;
+    // Links use filename stems, so names must be unique across notebooks.
+    while path.exists() || existing.iter().any(|e| e.name == stem_of(&path)) {
+        path = entry_dir.join(format!("{stamp}-{n}.md"));
+        n += 1;
+    }
+    path
+}
+
 /// Writes the draft to a new timestamped file and locks it. Never overwrites.
 #[tauri::command]
-fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
+fn commit_entry(app: AppHandle, content: String, notebook: Option<String>) -> Result<EntryMeta, String> {
     let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let dir = vault_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
+    let notebook = notebook.unwrap_or_default();
+    let entry_dir = notebook_dir(&dir, &notebook)?;
     let body = content.trim();
     if body.is_empty() {
         return Err("nothing written yet".into());
@@ -322,12 +430,7 @@ fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
 
     let now = chrono::Local::now();
     let stamp = now.format("%Y-%m-%d-%H%M%S").to_string();
-    let mut path = dir.join(format!("{}.md", stamp));
-    let mut n = 1;
-    while path.exists() {
-        path = dir.join(format!("{}-{}.md", stamp, n));
-        n += 1;
-    }
+    let path = next_entry_path(&dir, &entry_dir, &stamp);
 
     let raw = format!(
         "---\ncreated: {}\ntags: []\nlinks: []\n---\n\n{}\n",
@@ -338,7 +441,9 @@ fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
     let _ = fs::remove_file(draft_path(&app)?);
     // The entry is on disk; backing it up happens in the background and cannot fail the save.
     vault_git::record(&app, dir, format!("Add entry {}", stem_of(&path)), true);
-    Ok(meta_from(&path, &raw))
+    let mut meta = meta_from(&path, &raw);
+    meta.notebook = notebook;
+    Ok(meta)
 }
 
 fn collect_active_tags(dir: &PathBuf) -> Vec<String> {
@@ -513,6 +618,9 @@ pub fn run() {
             set_remote,
             resync_vault,
             list_entries,
+            list_notebooks,
+            create_notebook,
+            move_entry,
             read_entry,
             commit_entry,
             delete_entry,
@@ -540,6 +648,111 @@ mod tests {
     }
 
     const SAMPLE: &str = "---\ncreated: 2026-09-21T01:08:07+05:30\ntags: []\nlinks: []\n---\n\nWorking fine\n\nLooks good\n";
+
+    fn notebook_vault(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("ff-notebook-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn notebooks_include_nested_entries_and_skip_hidden_files() {
+        let root = notebook_vault("discovery");
+        create_notebook_folder(&root, " Work ").unwrap();
+        fs::create_dir_all(root.join("Work/Ideas")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("a.md"), SAMPLE).unwrap();
+        fs::write(root.join("Work/Ideas/b.md"), SAMPLE).unwrap();
+        fs::write(root.join(".git/hidden.md"), SAMPLE).unwrap();
+        fs::write(root.join("Work/.hidden.md"), SAMPLE).unwrap();
+        assert!(root.join("Work/.gitkeep").exists());
+        assert_eq!(collect_notebooks(&root).unwrap(), vec!["Work", "Work/Ideas"]);
+        let entries = collect_entries(&root);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].notebook, "Work/Ideas");
+        assert_eq!(entries[1].notebook, "");
+        assert!(create_notebook_folder(&root, "Work").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn moving_between_notebooks_preserves_bytes_and_links() {
+        let root = notebook_vault("move");
+        create_notebook_folder(&root, "Ideas").unwrap();
+        let a = root.join("a.md");
+        let b = root.join("b.md");
+        fs::write(&a, SAMPLE).unwrap();
+        fs::write(&b, SAMPLE).unwrap();
+        add_link(&a, "b").unwrap();
+        add_link(&b, "a").unwrap();
+        let before = fs::read(&a).unwrap();
+        let moved = move_entry_file(&root, &a, "Ideas").unwrap();
+        assert_eq!(fs::read(&moved).unwrap(), before);
+        assert!(!a.exists());
+        let entries = collect_entries(&root);
+        let a_meta = entries.iter().find(|e| e.name == "a").unwrap();
+        assert_eq!(related_to(&entries, a_meta)[0].name, "b");
+        assert_eq!(move_entry_file(&root, &moved, "").unwrap(), a);
+        assert_eq!(fs::read(&a).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn new_entry_names_remain_unique_across_notebooks() {
+        let root = notebook_vault("filenames");
+        create_notebook_folder(&root, "Ideas").unwrap();
+        fs::write(root.join("stamp.md"), SAMPLE).unwrap();
+        fs::write(root.join("Ideas/stamp-1.md"), SAMPLE).unwrap();
+        let path = next_entry_path(&root, &root.join("Ideas"), "stamp");
+        assert_eq!(path, root.join("Ideas/stamp-2.md"));
+        assert_eq!(fs::read_to_string(root.join("stamp.md")).unwrap(), SAMPLE);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn notebook_move_collision_keeps_both_entries() {
+        let root = notebook_vault("collision");
+        create_notebook_folder(&root, "Ideas").unwrap();
+        let source = root.join("a.md");
+        let target = root.join("Ideas/a.md");
+        fs::write(&source, "first").unwrap();
+        fs::write(&target, "second").unwrap();
+        assert!(move_entry_file(&root, &source, "Ideas").is_err());
+        assert_eq!(fs::read_to_string(source).unwrap(), "first");
+        assert_eq!(fs::read_to_string(target).unwrap(), "second");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn notebook_paths_reject_traversal_and_internal_files() {
+        let root = notebook_vault("validation");
+        for name in ["", ".git", "../outside", "a/b", "a\\b", "bad:name"] {
+            assert!(create_notebook_folder(&root, name).is_err(), "{name}");
+        }
+        for name in ["../", ".git", "/tmp", "a\\b"] {
+            assert!(notebook_dir(&root, name).is_err(), "{name}");
+        }
+        fs::create_dir(root.join(".git")).unwrap();
+        let internal = root.join(".git/config.md");
+        fs::write(&internal, "secret").unwrap();
+        assert!(move_entry_file(&root, &internal, "").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notebook_discovery_does_not_follow_symlinks() {
+        let root = notebook_vault("symlinks");
+        let outside = notebook_vault("outside");
+        fs::write(outside.join("a.md"), SAMPLE).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("Linked")).unwrap();
+        assert!(collect_notebooks(&root).unwrap().is_empty());
+        assert!(collect_entries(&root).is_empty());
+        assert!(notebook_dir(&root, "Linked").is_err());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
 
     #[test]
     fn tagging_leaves_the_body_byte_for_byte() {
@@ -612,6 +825,7 @@ mod tests {
         EntryMeta {
             path: format!("/tmp/{}.md", name),
             name: name.into(),
+            notebook: String::new(),
             created: name.into(),
             words: 0,
             preview: String::new(),

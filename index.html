@@ -24,7 +24,10 @@
         <div class="wordmark">forward flow<span class="brand-dot">.</span></div>
         <span class="eyebrow">A little further, every day.</span>
       </header>
-      <div class="writing-label eyebrow">THE NEXT PAGE</div>
+      <div class="writing-label">
+        <span class="eyebrow">THE NEXT PAGE</span>
+        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button">+ New notebook</button></div>
+      </div>
       <textarea
         id="editor"
         aria-label="Write a new entry"
@@ -53,6 +56,7 @@
           <span id="reader-count" class="dim"></span>
         </header>
 
+        <div class="notebook-controls reader-notebook-controls"><label for="reader-notebook" class="hint">Notebook</label><select id="reader-notebook"><option value="">Inbox</option></select><button id="reader-move" class="text-button" type="button">Move entry</button></div>
         <div id="reader-tags" class="tag-row"></div>
         <input
           id="tag-input"
@@ -95,6 +99,7 @@
       <div class="picker-inner">
         <div class="view-title"><div><span class="eyebrow">YOUR WORDS, KEPT</span><h1>Collected pages<span class="brand-dot">.</span></h1></div><button class="text-button" id="picker-close" type="button">Back to writing ↗</button></div>
         <p id="archive-count" class="hint"></p>
+        <div class="notebook-controls"><label for="picker-notebook" class="hint">Notebook</label><select id="picker-notebook"><option value="*">All pages</option><option value="">Inbox</option></select><button id="picker-new-notebook" class="text-button" type="button">+ New notebook</button></div>
         <div id="picker-head" class="picker-head hint" hidden></div>
         <input
           id="picker-filter"
@@ -146,6 +151,17 @@
           <button id="remote-cancel" class="ghost-btn" type="button">Cancel</button>
         </div>
       </div>
+    </section>
+
+    <section id="notebook" class="veil" hidden>
+      <form id="notebook-form" class="setup-inner">
+        <span class="eyebrow">MAKE ROOM FOR A NEW THREAD</span>
+        <h1>New notebook<span class="brand-dot">.</span></h1>
+        <label for="notebook-name" class="hint">Notebook name</label>
+        <input id="notebook-name" type="text" autocomplete="off" placeholder="Ideas, travel, work…" required maxlength="100" />
+        <p id="notebook-error" class="hint" role="alert"></p>
+        <div class="remote-actions"><button id="notebook-create" class="ghost-btn" type="submit">Create notebook</button><button id="notebook-cancel" class="ghost-btn" type="button">Cancel</button></div>
+      </form>
     </section>
 
     <div id="hud" class="hint" role="status" aria-live="polite"></div>

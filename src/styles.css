@@ -25,10 +25,10 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
 body { background: var(--paper); color: var(--ink); font-family: var(--serif); -webkit-font-smoothing: antialiased; caret-color: var(--accent); }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: wait; }
-button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
 ::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 [hidden] { display: none !important; }
@@ -129,3 +129,12 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.writing-label > .eyebrow { margin-bottom: 0.5rem; }
+.notebook-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.8rem; }
+.notebook-controls select { min-width: 6rem; max-width: min(16rem, 60vw); min-height: 44px; padding: 0.5rem 1.8rem 0.5rem 0.65rem; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font: 0.8rem/1.5 var(--sans); }
+.reader-notebook-controls { margin-bottom: 1.5rem; }
+.row-notebook { margin-top: 0.5rem; color: var(--accent); }
+#notebook-name { width: 100%; padding: 0.9rem 1rem; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; font: 0.9rem/1.5 var(--sans); }
+#notebook-error:empty { display: none; }
+#notebook-create { background: var(--accent); color: var(--surface); }
