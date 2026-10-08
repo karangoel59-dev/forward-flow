@@ -532,6 +532,7 @@ function renderPicker() {
 
   shown = sortEntries(pool);
   sortLabel.textContent = SORT_LABEL[sort];
+  el<HTMLElement>("archive-count").textContent = `${shown.length} ${shown.length === 1 ? "page" : "pages"}${raw ? " found" : " in your collection"}`;
 
   if (cursor >= shown.length) cursor = Math.max(0, shown.length - 1);
   pickerList.replaceChildren();
@@ -852,6 +853,9 @@ pickerFilter.addEventListener("input", () => {
   renderPicker();
 });
 
+el<HTMLButtonElement>("reader-close").addEventListener("click", leaveReader);
+el<HTMLButtonElement>("picker-close").addEventListener("click", leavePicker);
+
 el<HTMLButtonElement>("setup-pick").addEventListener("click", chooseVault);
 
 el<HTMLButtonElement>("remote-save").addEventListener("click", saveRemote);
@@ -886,7 +890,7 @@ window.addEventListener("resize", () => scheduleFit(true));
 // Preserve touch-button clicks when returning focus to the editor.
 document.addEventListener("mousedown", (e) => {
   const target = e.target as HTMLElement | null;
-  if (mode === "write" && target !== editor && !target?.closest(".touchbar")) {
+  if (mode === "write" && target !== editor && !target?.closest("button, input, .touchbar")) {
     e.preventDefault();
     editor.focus();
   }

@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="stylesheet" href="/src/styles.css" />
     <title>Forward Flow</title>
     <script type="module" src="/src/main.ts" defer></script>
@@ -11,6 +11,8 @@
 
     <section id="setup" class="veil" hidden>
       <div class="setup-inner">
+        <span class="eyebrow">WELCOME TO FORWARD FLOW</span>
+        <h1>A place for your thoughts.</h1>
         <p class="setup-line">Where should your entries live?</p>
         <button id="setup-pick" class="ghost-btn">Choose a folder</button>
         <p class="hint">Plain markdown files. One per entry. Yours to move or back up.</p>
@@ -18,26 +20,34 @@
     </section>
 
     <main id="write">
+      <header class="writing-head">
+        <div class="wordmark">forward flow<span class="brand-dot">.</span></div>
+        <span class="eyebrow">A little further, every day.</span>
+      </header>
+      <div class="writing-label eyebrow">THE NEXT PAGE</div>
       <textarea
         id="editor"
+        aria-label="Write a new entry"
         spellcheck="false"
         autocomplete="off"
         autocorrect="off"
         autocapitalize="off"
-        placeholder="Begin."
+        placeholder="Let the next thought begin."
       ></textarea>
 
-      <nav class="touchbar touchbar-top">
-        <button id="touch-entries" type="button">entries</button>
-        <button id="touch-resync" type="button">sync</button>
-        <button id="touch-remote" type="button">remote</button>
-        <button id="touch-commit" type="button">commit</button>
+      <nav class="touchbar touchbar-top" aria-label="Writing actions">
+        <button id="touch-entries" type="button">Entries</button>
+        <button id="touch-resync" type="button">Sync</button>
+        <button id="touch-remote" type="button">Settings</button>
+        <button id="touch-commit" type="button">Commit entry <span aria-hidden="true">↗</span></button>
       </nav>
+      <p class="writing-note">Write freely. Commit when you’re ready. Then begin again.</p>
       <div id="write-count" class="hint write-count" hidden></div>
     </main>
 
     <section id="reader" class="veil" hidden>
       <article class="reader-inner">
+        <div class="view-title"><span class="eyebrow">A COMMITTED PAGE</span><button class="text-button" id="reader-close" type="button">Back ↗</button></div>
         <header class="reader-head">
           <span id="reader-date"></span>
           <span id="reader-count" class="dim"></span>
@@ -46,6 +56,7 @@
         <div id="reader-tags" class="tag-row"></div>
         <input
           id="tag-input"
+          aria-label="Entry tags"
           class="tag-input"
           type="text"
           spellcheck="false"
@@ -82,13 +93,16 @@
 
     <section id="picker" class="veil" hidden>
       <div class="picker-inner">
+        <div class="view-title"><div><span class="eyebrow">YOUR WORDS, KEPT</span><h1>Collected pages<span class="brand-dot">.</span></h1></div><button class="text-button" id="picker-close" type="button">Back to writing ↗</button></div>
+        <p id="archive-count" class="hint"></p>
         <div id="picker-head" class="picker-head hint" hidden></div>
         <input
           id="picker-filter"
+          aria-label="Search entries"
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="Filter entries…  (#tag to match tags)"
+          placeholder="Search your pages or #tags…"
         />
         <ul id="picker-list"></ul>
         <footer class="picker-foot hint">
@@ -109,10 +123,13 @@
 
     <section id="remote" class="veil" hidden>
       <div class="setup-inner remote-inner">
+        <span class="eyebrow">YOUR WRITING, EVERYWHERE</span>
+        <h1>Keep your pages together.</h1>
         <p class="setup-line">Sync entries to a git remote</p>
         <p id="remote-current" class="hint"></p>
         <input
           id="remote-url"
+          aria-label="Git remote URL"
           type="text"
           spellcheck="false"
           autocomplete="off"
@@ -131,6 +148,6 @@
       </div>
     </section>
 
-    <div id="hud" class="hint"></div>
+    <div id="hud" class="hint" role="status" aria-live="polite"></div>
   </body>
 </html>
