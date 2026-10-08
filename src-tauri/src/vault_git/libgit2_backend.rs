@@ -27,29 +27,32 @@ const CA_BUNDLE: &[u8] = include_bytes!("../../assets/cacert.pem");
 const CA_BUNDLE_NAME: &str = ".forward-flow-cacert.pem";
 
 /// Extracts and registers the bundled trust roots.
-fn ensure_ca_bundle(vault: &Path) {
+static TLS_SETUP: Mutex<()> = Mutex::new(());
+
+fn ensure_ca_bundle(vault: &Path) -> Result<(), String> {
+    let _setup = TLS_SETUP.lock().unwrap_or_else(|e| e.into_inner());
     let path = vault.join(CA_BUNDLE_NAME);
-    let needs_write = match fs::metadata(&path) {
-        Ok(meta) => meta.len() != CA_BUNDLE.len() as u64,
-        Err(_) => true,
-    };
-    if needs_write && fs::write(&path, CA_BUNDLE).is_err() {
-        return;
+    if fs::read(&path).ok().as_deref() != Some(CA_BUNDLE) {
+        fs::write(&path, CA_BUNDLE)
+            .map_err(|e| format!("cannot write TLS trust roots: {e}"))?;
     }
 
-    // SSL_CERT_FILE covers OpenSSL initialization; the libgit2 option updates its context.
+    // Initialize git2 before setting trust paths: its OpenSSL probe can change the environment.
+    let _ = Repository::open(vault);
     std::env::set_var("SSL_CERT_FILE", &path);
-    // This updates libgit2 process-wide TLS configuration.
+    #[cfg(target_os = "android")]
     unsafe {
-        let _ = git2::opts::set_ssl_cert_file(path.as_path());
+        git2::opts::set_ssl_cert_file(path.as_path())
+            .map_err(|e| format!("cannot load TLS trust roots: {}", e.message()))?;
     }
+    Ok(())
 }
 
 // repository
 
 /// Makes `dir` a git repository if it is not one yet. Safe to call every time.
 pub fn ensure_repo(dir: &Path) -> Result<(), String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir)?;
     let repo = if dir.join(".git").exists() {
         Repository::open(dir).map_err(msg)?
     } else {
@@ -97,7 +100,7 @@ fn signature(repo: &Repository) -> Result<Signature<'static>, String> {
 
 /// Stages everything in the vault and commits it. Returns false when there was nothing new.
 pub fn commit_all(dir: &Path, message: &str) -> Result<bool, String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir)?;
     let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let repo = Repository::open(dir).map_err(msg)?;
 
@@ -134,7 +137,7 @@ fn remote_name(repo: &Repository) -> Option<String> {
 
 /// The vault's remote URL, if it has one, for showing back in the remote-setup screen.
 pub fn get_remote(dir: &Path) -> Option<String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir).ok()?;
     let repo = Repository::open(dir).ok()?;
     let name = remote_name(&repo)?;
     let remote = repo.find_remote(&name).ok()?;
@@ -143,7 +146,7 @@ pub fn get_remote(dir: &Path) -> Option<String> {
 
 /// Points the vault at `url`, replacing whatever `origin` already pointed at.
 pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir)?;
     let repo = Repository::open(dir).map_err(msg)?;
     match remote_name(&repo) {
         Some(name) => repo.remote_set_url(&name, url).map_err(msg)?,
@@ -352,7 +355,9 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
 
 /// Pushes the current branch, merging in the remote's own changes first if it has moved on.
 pub fn push(dir: &Path) -> SyncOutcome {
-    ensure_ca_bundle(dir);
+    if let Err(e) = ensure_ca_bundle(dir) {
+        return SyncOutcome::Failed(e);
+    }
     let repo = match Repository::open(dir) {
         Ok(r) => r,
         Err(e) => return classify(msg(e)),
@@ -415,7 +420,7 @@ fn push_refspec(repo: &Repository, refspec: &str) {
 /// Brings in any commits the remote gained since, merging them into the current branch.
 /// Returns Ok(true) if local HEAD was updated, Ok(false) if up-to-date.
 pub fn pull_and_merge(dir: &Path) -> Result<bool, String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir)?;
     let repo = Repository::open(dir).map_err(msg)?;
     let Some(remote) = remote_name(&repo) else {
         return Ok(false);
@@ -445,7 +450,7 @@ pub fn pull_and_merge(dir: &Path) -> Result<bool, String> {
 /// - Creates branch `tag/<tag>` at HEAD for each tag in `active_tags` and pushes it to remote.
 /// - Deletes any local and remote branch `tag/<tag>` whose tag is not in `active_tags`.
 pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), String> {
-    ensure_ca_bundle(dir);
+    ensure_ca_bundle(dir)?;
     let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let repo = Repository::open(dir).map_err(msg)?;
     let head_commit = match repo.head().and_then(|h| h.peel_to_commit()) {
@@ -577,6 +582,23 @@ mod tests {
             "corrupted or empty bundle should be rewritten with full bundle"
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn same_size_corruption_of_trust_roots_is_repaired() {
+        let dir = fresh("lg2-ca-content");
+        fs::write(dir.join(CA_BUNDLE_NAME), vec![b' '; CA_BUNDLE.len()]).unwrap();
+        ensure_ca_bundle(&dir).unwrap();
+        assert_eq!(fs::read(dir.join(CA_BUNDLE_NAME)).unwrap(), CA_BUNDLE);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn trust_root_write_errors_are_reported() {
+        let dir = fresh("lg2-ca-error");
+        fs::create_dir(dir.join(CA_BUNDLE_NAME)).unwrap();
+        assert!(ensure_ca_bundle(&dir).unwrap_err().contains("cannot write TLS trust roots"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
