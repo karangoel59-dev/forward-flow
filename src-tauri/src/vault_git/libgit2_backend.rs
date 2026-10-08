@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use git2::{
-    build::CheckoutBuilder, BranchType, CertificateCheckStatus, Cred, CredentialType, FetchOptions,
+    build::CheckoutBuilder, BranchType, Cred, CredentialType, FetchOptions,
     IndexAddOption, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
 };
 
@@ -290,8 +290,8 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let rejected = std::cell::RefCell::new(None::<String>);
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     callbacks.push_update_reference(|_refname, status| {
         if let Some(reason) = status {
@@ -335,8 +335,8 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     let url = remote.url().unwrap_or("").to_string();
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
@@ -351,12 +351,21 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
         return Ok(());
     }
 
+    // Network work is finished. Keep only checkout/ref writes under the entry-write lock.
+    let _write = crate::VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut status_options = git2::StatusOptions::new();
+    status_options.include_untracked(true).include_ignored(false);
+    if !repo.statuses(Some(&mut status_options)).map_err(msg)?.is_empty() {
+        return Err("local vault changes are awaiting a commit; retry sync after saving".into());
+    }
+
     let branch_ref_name = format!("refs/heads/{branch}");
     if analysis.is_fast_forward() {
+        let tree = repo.find_commit(fetch_commit.id()).and_then(|c| c.tree()).map_err(msg)?;
+        repo.checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe())).map_err(msg)?;
         let mut branch_ref = repo.find_reference(&branch_ref_name).map_err(msg)?;
         branch_ref.set_target(fetch_commit.id(), "forward-flow: fast-forward").map_err(msg)?;
         repo.set_head(&branch_ref_name).map_err(msg)?;
-        repo.checkout_head(Some(CheckoutBuilder::new().force())).map_err(msg)?;
         return Ok(());
     }
 
@@ -370,6 +379,7 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     let tree = repo.find_tree(merged_index.write_tree_to(repo).map_err(msg)?).map_err(msg)?;
 
     let sig = signature(repo)?;
+    repo.checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe())).map_err(msg)?;
     repo.commit(
         Some("HEAD"),
         &sig,
@@ -379,7 +389,6 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
         &[&local_commit, &remote_commit],
     )
     .map_err(msg)?;
-    repo.checkout_head(Some(CheckoutBuilder::new().force())).map_err(msg)?;
     Ok(())
 }
 
@@ -437,8 +446,8 @@ fn push_refspec(repo: &Repository, refspec: &str) {
 
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     let mut opts = PushOptions::new();
     opts.remote_callbacks(callbacks);
@@ -676,6 +685,51 @@ mod tests {
         commit_all(&laptop, "laptop 2").unwrap();
         let outcome = push(&laptop);
         assert_eq!(outcome, SyncOutcome::Synced);
+    }
+
+    #[test]
+    fn remote_updates_preserve_uncommitted_files_and_head() {
+        // Exercise fast-forwards and merges with edits, deletions, and untracked entries.
+        for diverged in [false, true] {
+            let suffix = if diverged { "merge" } else { "ff" };
+            let remote = bare_remote(&format!("lg2-merge-dirty-remote-{suffix}"));
+            let local = fresh(&format!("lg2-merge-dirty-local-{suffix}"));
+            let peer = fresh(&format!("lg2-merge-dirty-peer-{suffix}"));
+            ensure_repo(&local).unwrap();
+            write(&local, "edited.md", "original\n");
+            write(&local, "deleted.md", "original\n");
+            commit_all(&local, "initial").unwrap();
+            add_remote(&local, &remote);
+            assert_eq!(push(&local), SyncOutcome::Synced);
+            fs::remove_dir_all(&peer).unwrap();
+            git(&std::env::temp_dir(), &["clone", "--quiet", remote.to_str().unwrap(), peer.to_str().unwrap()]).unwrap();
+            ensure_repo(&peer).unwrap();
+            if diverged {
+                write(&local, "local.md", "committed local entry\n");
+                commit_all(&local, "local").unwrap();
+            }
+            write(&peer, "remote.md", "remote entry\n");
+            commit_all(&peer, "remote").unwrap();
+            assert_eq!(push(&peer), SyncOutcome::Synced);
+
+            write(&local, "edited.md", "pending tags\n");
+            fs::remove_file(local.join("deleted.md")).unwrap();
+            write(&local, "new.md", "pending entry\n");
+            let before = git(&local, &["rev-parse", "HEAD"]).unwrap();
+            assert!(pull_and_merge(&local).unwrap_err().contains("awaiting a commit"));
+            assert_eq!(git(&local, &["rev-parse", "HEAD"]).unwrap(), before);
+            assert_eq!(fs::read_to_string(local.join("edited.md")).unwrap(), "pending tags\n");
+            assert!(!local.join("deleted.md").exists());
+            assert_eq!(fs::read_to_string(local.join("new.md")).unwrap(), "pending entry\n");
+
+            commit_all(&local, "pending changes").unwrap();
+            assert!(pull_and_merge(&local).unwrap());
+            assert!(local.join("remote.md").exists());
+            assert_eq!(fs::read_to_string(local.join("edited.md")).unwrap(), "pending tags\n");
+            assert!(!local.join("deleted.md").exists());
+            assert!(git(&local, &["status", "--porcelain"]).unwrap().trim().is_empty());
+            for dir in [&local, &peer, &remote] { fs::remove_dir_all(dir).unwrap(); }
+        }
     }
 
     #[test]

@@ -208,6 +208,7 @@ function scheduleDraftSave() {
 // ---------------------------------------------------------------- modes
 
 function show(next: Mode) {
+  if (next !== "reader") resetDeleteConfirmation();
   mode = next;
   setup.hidden = next !== "setup";
   reader.hidden = next !== "reader";
@@ -285,6 +286,8 @@ async function commit() {
     return;
   }
   committing = true;
+  editor.readOnly = true;
+  clearTimeout(draftTimer);
   try {
     const meta = await invoke<EntryMeta>("commit_entry", { content: editor.value });
     editor.classList.add("committing");
@@ -296,12 +299,15 @@ async function commit() {
       editor.classList.remove("committing");
       fit(true);
       editor.focus();
+      editor.readOnly = false;
       committing = false;
     }, 260);
     entries = [];
     hud(`locked · ${meta.words} ${meta.words === 1 ? "word" : "words"}`);
   } catch (e) {
+    editor.readOnly = false;
     committing = false;
+    scheduleDraftSave();
     hud(String(e));
   }
 }
@@ -374,6 +380,7 @@ async function openEntry(path: string, remember = true) {
   else if (remember && mode === "write") readerOrigin = "write";
   try {
     const full = await invoke<EntryFull>("read_entry", { path });
+    if (current?.meta.path !== full.meta.path) resetDeleteConfirmation();
     current = full;
     relCursor = 0;
     tagEditing = false;
@@ -467,22 +474,26 @@ async function unlinkSelected() {
 // ---------------------------------------------------------------- delete
 
 let deleteConfirmTimer = 0;
-let deletePending = false;
+let deletePendingPath: string | null = null;
+
+function resetDeleteConfirmation() {
+  deletePendingPath = null;
+  clearTimeout(deleteConfirmTimer);
+}
 
 async function deleteCurrentEntry() {
   if (!current) return;
-  if (!deletePending) {
-    deletePending = true;
+  if (deletePendingPath !== current.meta.path) {
+    deletePendingPath = current.meta.path;
     hud("delete? tap or press 'd' again to confirm", 3000);
     clearTimeout(deleteConfirmTimer);
     deleteConfirmTimer = window.setTimeout(() => {
-      deletePending = false;
+      resetDeleteConfirmation();
     }, 3000);
     return;
   }
 
-  deletePending = false;
-  clearTimeout(deleteConfirmTimer);
+  resetDeleteConfirmation();
   const path = current.meta.path;
   try {
     await invoke("delete_entry", { path });
@@ -832,7 +843,7 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------- wire-up
 
 editor.addEventListener("keydown", (e) => {
-  if (e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+  if (!editor.readOnly && e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     e.preventDefault();
     if (!document.execCommand("insertText", false, "  ")) {
       const start = editor.selectionStart;

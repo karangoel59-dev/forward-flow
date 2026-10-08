@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
+
+// Protect the brief filesystem phase of Android checkouts against entry mutations.
+static VAULT_WRITES: Mutex<()> = Mutex::new(());
 
 mod vault_git;
 
@@ -314,6 +318,7 @@ fn read_entry(app: AppHandle, path: String) -> Result<EntryFull, String> {
 /// Writes the draft to a new timestamped file and locks it. Never overwrites.
 #[tauri::command]
 fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let dir = vault_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -357,6 +362,7 @@ fn collect_active_tags(dir: &PathBuf) -> Vec<String> {
 
 #[tauri::command]
 fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let target = entry_in_vault(&app, &path)?;
     let raw = fs::read_to_string(&target).map_err(|e| e.to_string())?;
     let meta = meta_from(&target, &raw);
@@ -377,23 +383,18 @@ fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
     // 3. Make a git commit for the deletion (revert commit)
     vault_git::record(&app, dir.clone(), format!("Revert entry {}", stem), true);
 
-    // 4. Update tag branches in case any tags were orphaned by this deletion
-    let active = collect_active_tags(&dir);
-    vault_git::sync_tag_branches(&app, dir, active);
-
     let _ = app.emit("vault-updated", ());
     Ok(())
 }
 
 #[tauri::command]
 fn set_tags(app: AppHandle, path: String, tags: Vec<String>) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let target = entry_in_vault(&app, &path)?;
     let cleaned = dedupe(tags.iter().map(|t| clean_tag(t)).collect());
     let meta = rewrite_meta(&target, Some(cleaned), None)?;
     let dir = vault_dir(&app)?;
     vault_git::record(&app, dir.clone(), format!("Tag {}", meta.name), true);
-    let active = collect_active_tags(&dir);
-    vault_git::sync_tag_branches(&app, dir, active);
     Ok(meta)
 }
 
@@ -427,6 +428,7 @@ fn related_to<'a>(all: &'a [EntryMeta], me: &EntryMeta) -> Vec<&'a EntryMeta> {
 /// Links are symmetric: both files record the other.
 #[tauri::command]
 fn link_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let pa = entry_in_vault(&app, &a)?;
     let pb = entry_in_vault(&app, &b)?;
     if pa == pb {
@@ -446,6 +448,7 @@ fn link_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
 
 #[tauri::command]
 fn unlink_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let pa = entry_in_vault(&app, &a)?;
     let pb = entry_in_vault(&app, &b)?;
 
@@ -507,8 +510,8 @@ pub fn run() {
             // Only problems are reported: a quiet launch should stay quiet.
             if let Ok(vault) = vault_dir(app.handle()) {
                 vault_git::record(app.handle(), vault.clone(), "Sync vault".into(), false);
-                vault_git::start_background_sync(app.handle().clone(), vault);
             }
+            vault_git::start_background_sync(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

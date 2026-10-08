@@ -28,6 +28,9 @@ use shell as backend;
 #[cfg(target_os = "android")]
 use libgit2_backend as backend;
 
+// Keep a tag-branch update after its corresponding commit, including rapid saves.
+static RECORD: Mutex<()> = Mutex::new(());
+
 struct PushState {
     running: bool,
     /// Folders with a save that landed while a push was in flight; pushed again once it finishes.
@@ -108,9 +111,14 @@ fn request_push<R: Runtime>(app: AppHandle<R>, dir: PathBuf, announce: bool) {
 pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, announce: bool) {
     let app = app.clone();
     thread::spawn(move || {
+        let _record = RECORD.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = backend::ensure_repo(&dir).and_then(|_| backend::commit_all(&dir, &message)) {
             emit(&app, "error", e);
             return;
+        }
+        let active = crate::collect_active_tags(&dir);
+        if let Err(e) = backend::sync_tag_branches(&dir, &active) {
+            emit(&app, "error", format!("Branch sync failed: {}", e));
         }
         request_push(app, dir, announce);
     });
@@ -136,7 +144,10 @@ pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> 
 /// Emits "vault-updated" event if remote changes were pulled into the working tree.
 pub fn sync_vault<R: Runtime>(app: &AppHandle<R>, dir: &std::path::Path, announce: bool) -> Result<bool, String> {
     backend::ensure_repo(dir)?;
-    let updated = backend::pull_and_merge(dir).unwrap_or(false);
+    let updated = backend::pull_and_merge(dir).map_err(|detail| {
+        emit(app, "error", detail.clone());
+        detail
+    })?;
     let outcome = backend::push(dir);
     match outcome {
         SyncOutcome::Synced if announce => emit(app, "synced", String::new()),
@@ -159,21 +170,13 @@ pub fn sync_now<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, announce: bool) {
 }
 
 /// Spawns a background timer to periodically auto-sync every 60 seconds if a remote exists.
-pub fn start_background_sync<R: Runtime>(app: AppHandle<R>, dir: PathBuf) {
+pub fn start_background_sync(app: AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(std::time::Duration::from_secs(60));
-        if backend::get_remote(&dir).is_some() {
-            let _ = sync_vault(&app, &dir, false);
-        }
-    });
-}
-
-/// Synchronizes git branches for active tags.
-pub fn sync_tag_branches<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, active_tags: Vec<String>) {
-    let app = app.clone();
-    thread::spawn(move || {
-        if let Err(e) = backend::sync_tag_branches(&dir, &active_tags) {
-            emit(&app, "error", format!("Branch sync failed: {}", e));
+        if let Ok(dir) = crate::vault_dir(&app) {
+            if backend::get_remote(&dir).is_some() {
+                let _ = sync_vault(&app, &dir, false);
+            }
         }
     });
 }
@@ -259,6 +262,27 @@ mod tests {
                     .map(|tree| tree.lines().filter(|f| f.starts_with("2026-09-21-10000")).count() == 8)
                     .unwrap_or(false)
         });
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn recording_tags_publishes_branches_at_the_new_commit() {
+        let _turn = BACKGROUND.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, remote) = published_vault("record-tags");
+        let app = tauri::test::mock_app();
+        let (tx, rx) = mpsc::channel();
+        app.handle().listen("sync-status", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+        write(&dir, "a.md", "---\ncreated: x\ntags: [ideas]\nlinks: []\n---\n\nentry\n");
+        record(app.handle(), dir.clone(), "Tag entry".into(), true);
+        let status = rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        assert!(status.contains("synced"), "{status}");
+        let head = git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(git(&dir, &["rev-parse", "tag/ideas"]).unwrap(), head);
+        assert_eq!(git(&remote, &["rev-parse", "tag/ideas"]).unwrap(), head);
+        wait_until("push queue idle", || !PUSH.lock().unwrap().running);
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&remote).unwrap();
     }
