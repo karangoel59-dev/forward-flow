@@ -113,6 +113,7 @@ jobs:
       - name: Build release APK
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CARGO_PROFILE_DEV_DEBUG: "0"
           RANLIB: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
           AR: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: npx tauri android build --debug --apk --target aarch64 --features tls-diagnostics
