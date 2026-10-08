@@ -26,6 +26,8 @@ git2 = { version = "0.19", default-features = false }
 [target.'cfg(target_os = "android")'.dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-openssl", "vendored-libgit2", "https"] }
 
+libgit2-sys = "0.17"
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 

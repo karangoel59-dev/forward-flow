@@ -855,6 +855,7 @@ version = "0.3.0"
 dependencies = [
  "chrono",
  "git2",
+ "libgit2-sys",
  "serde",
  "serde_json",
  "tauri",

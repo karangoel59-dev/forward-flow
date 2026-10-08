@@ -41,9 +41,23 @@ fn ensure_ca_bundle(vault: &Path) -> Result<(), String> {
     let _ = Repository::open(vault);
     std::env::set_var("SSL_CERT_FILE", &path);
     #[cfg(target_os = "android")]
-    unsafe {
-        git2::opts::set_ssl_cert_file(path.as_path())
-            .map_err(|e| format!("cannot load TLS trust roots: {}", e.message()))?;
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let cert_path = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        // Keep the path buffer alive across the variadic libgit2 call.
+        let result = unsafe {
+            libgit2_sys::git_libgit2_opts(
+                libgit2_sys::GIT_OPT_SET_SSL_CERT_LOCATIONS as std::os::raw::c_int,
+                cert_path.as_ptr(),
+                std::ptr::null::<std::os::raw::c_char>(),
+            )
+        };
+        if result < 0 {
+            let error = git2::Error::last_error(result).map(|e| e.message().to_string())
+                .unwrap_or_else(|| "unknown TLS configuration error".into());
+            return Err(format!("cannot load TLS trust roots: {error}"));
+        }
     }
     Ok(())
 }
