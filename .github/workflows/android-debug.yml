@@ -2,6 +2,9 @@ name: Android TLS debug
 
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/android-ca-initialization]
+    paths: [.github/workflows/android-debug.yml]
 
 permissions:
   contents: write
