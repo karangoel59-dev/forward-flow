@@ -54,9 +54,29 @@ fn ensure_ca_bundle(vault: &Path) -> Result<(), String> {
             )
         };
         if result < 0 {
-            let error = git2::Error::last_error(result).map(|e| e.message().to_string())
-                .unwrap_or_else(|| "unknown TLS configuration error".into());
-            return Err(format!("cannot load TLS trust roots: {error}"));
+            // openssl-src uses no-stdio on Android, so file BIOs cannot load PEM roots.
+            // The option call initializes libgit2's SSL context before we fill its store.
+            use foreign_types::ForeignType;
+            unsafe extern "C" {
+                static mut git__ssl_ctx: *mut openssl_sys::SSL_CTX;
+            }
+            let _ = openssl::error::ErrorStack::get();
+            let certs = openssl::x509::X509::stack_from_pem(CA_BUNDLE)
+                .map_err(|e| format!("cannot parse TLS trust roots: {e}"))?;
+            unsafe {
+                if git__ssl_ctx.is_null() {
+                    return Err("libgit2 TLS context was not initialized".into());
+                }
+                let store = openssl_sys::SSL_CTX_get_cert_store(git__ssl_ctx);
+                if store.is_null() {
+                    return Err("libgit2 TLS trust store is unavailable".into());
+                }
+                for cert in certs {
+                    if openssl_sys::X509_STORE_add_cert(store, cert.as_ptr()) != 1 {
+                        return Err(format!("cannot add TLS trust root: {}", openssl::error::ErrorStack::get()));
+                    }
+                }
+            }
         }
     }
     Ok(())
