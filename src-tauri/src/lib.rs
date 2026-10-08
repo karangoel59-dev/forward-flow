@@ -495,6 +495,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(all(target_os = "android", feature = "tls-diagnostics"))]
+            if let Ok(dir) = app.path().app_data_dir() {
+                vault_git::diagnose_tls(dir);
+            }
             // Commit external changes and retry pending pushes on launch.
             if let Ok(vault) = vault_dir(app.handle()) {
                 vault_git::record(app.handle(), vault.clone(), "Sync vault".into(), false);

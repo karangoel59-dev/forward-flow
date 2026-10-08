@@ -1,0 +1,127 @@
+name: Android TLS debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Ensure required SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+          link-to-sdk: true
+
+      # Restore prefixed binutils names required by vendored OpenSSL on newer NDKs.
+      - name: Restore legacy binutils names the NDK dropped
+        run: |
+          bin="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for triple in aarch64-linux-android arm-linux-androideabi armv7a-linux-androideabi i686-linux-android x86_64-linux-android; do
+            for tool in ar ranlib nm strip objcopy objdump; do
+              link="$bin/$triple-$tool"
+              [ -e "$link" ] || ln -s "$bin/llvm-$tool" "$link"
+            done
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Configure isolated debug app
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("src-tauri/tauri.conf.json")
+          config = json.loads(p.read_text())
+          config["identifier"] = "com.karangoel59.forwardflowdebug"
+          config["productName"] = "Forward Flow TLS Debug"
+          config["build"]["devUrl"] = None
+          p.write_text(json.dumps(config))
+          PY
+
+      - name: Init Android project
+        env:
+          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: npx tauri android init --ci
+
+      # Replace generated Tauri icons with our launcher and adaptive icons.
+      - name: Install our launcher icon into the generated Android project
+        run: |
+          res=src-tauri/gen/android/app/src/main/res
+          for d in mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+            cp "src-tauri/icons/android/$d/ic_launcher.png" "$res/$d/ic_launcher.png"
+            cp "src-tauri/icons/android/$d/ic_launcher_round.png" "$res/$d/ic_launcher_round.png"
+            cp "src-tauri/icons/android/$d/ic_launcher_foreground.png" "$res/$d/ic_launcher_foreground.png"
+          done
+          mkdir -p "$res/mipmap-anydpi-v26"
+          cp src-tauri/icons/android/mipmap-anydpi-v26/ic_launcher.xml "$res/mipmap-anydpi-v26/ic_launcher.xml"
+          python3 - <<'PY'
+          import re
+          import pathlib
+
+          colors = pathlib.Path("src-tauri/gen/android/app/src/main/res/values/colors.xml")
+          ours = pathlib.Path("src-tauri/icons/android/values/ic_launcher_background.xml").read_text()
+          bg = re.search(r'<color name="ic_launcher_background">(#[0-9a-fA-F]+)</color>', ours).group(1)
+
+          text = colors.read_text()
+          assert "ic_launcher_background" not in text, "colors.xml already defines this — template changed upstream"
+          text = text.replace(
+              "</resources>",
+              f'    <color name="ic_launcher_background">{bg}</color>\n</resources>',
+          )
+          colors.write_text(text)
+          PY
+          echo "--- installed icon files ---"
+          find "$res/mipmap-anydpi-v26" "$res"/mipmap-*dpi -name 'ic_launcher*'
+          grep -n "ic_launcher_background" "$res/values/colors.xml"
+
+      # Set archive tools explicitly; OpenSSL Configure uses unqualified tool names.
+      - name: Build release APK
+        env:
+          NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          RANLIB: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+          AR: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: npx tauri android build --debug --apk --target aarch64 --features tls-diagnostics
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk=$(find src-tauri/gen/android -name "*.apk" | head -n 1)
+          echo "path=$apk" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward-flow-android-tls-debug
+          path: ${{ steps.apk.outputs.path }}
+

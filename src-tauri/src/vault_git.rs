@@ -292,3 +292,8 @@ mod tests {
         std::fs::remove_dir_all(&remote).unwrap();
     }
 }
+
+#[cfg(all(target_os = "android", feature = "tls-diagnostics"))]
+pub fn diagnose_tls(dir: PathBuf) {
+    thread::spawn(move || libgit2_backend::diagnose_tls(&dir));
+}

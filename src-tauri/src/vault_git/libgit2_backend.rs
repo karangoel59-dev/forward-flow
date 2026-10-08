@@ -766,3 +766,42 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+#[cfg(all(target_os = "android", feature = "tls-diagnostics"))]
+pub fn diagnose_tls(output_dir: &Path) {
+    use openssl::ssl::{SslContextBuilder, SslMethod};
+    use std::fmt::Write;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let mut report = String::new();
+    let dir = output_dir.join("tls-probe");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join(CA_BUNDLE_NAME);
+    let write = fs::write(&path, CA_BUNDLE);
+    let _ = writeln!(report, "OpenSSL: {}", openssl::version::version());
+    let _ = writeln!(report, "write={write:?} bytes={} path={}", CA_BUNDLE.len(), path.display());
+    let _ = writeln!(report, "rust_read={:?}", fs::read(&path).map(|v| v == CA_BUNDLE));
+    unsafe extern "C" {
+        fn fopen(path: *const std::os::raw::c_char, mode: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+        fn fclose(file: *mut std::ffi::c_void) -> std::os::raw::c_int;
+    }
+    let cpath = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let mode = CString::new("r").unwrap();
+    unsafe {
+        let file = fopen(cpath.as_ptr(), mode.as_ptr());
+        let _ = writeln!(report, "libc_fopen={} errno={}", !file.is_null(), std::io::Error::last_os_error());
+        if !file.is_null() { fclose(file); }
+    }
+    match SslContextBuilder::new(SslMethod::tls()) {
+        Ok(mut ctx) => { let _ = writeln!(report, "openssl_set_ca_file={:?}", ctx.set_ca_file(&path)); }
+        Err(e) => { let _ = writeln!(report, "openssl_context={e:?}"); }
+    }
+    let _ = writeln!(report, "git2_trust_setup={:?}", ensure_ca_bundle(&dir));
+    let _ = writeln!(report, "remaining_openssl_errors={:?}", openssl::error::ErrorStack::get());
+    if let Ok(repo) = Repository::init(&dir) {
+        if let Ok(mut remote) = repo.remote_anonymous("https://github.com/karangoel59-dev/forward-flow.git") {
+            let _ = writeln!(report, "github_public_fetch={:?}", remote.fetch(&["master"], None, None));
+        }
+    }
+    let _ = fs::write(output_dir.join("tls-diagnostics.txt"), report);
+}
