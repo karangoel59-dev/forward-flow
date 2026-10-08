@@ -19,22 +19,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
 
-# Only Android actually runs the libgit2 backend (see src/vault_git/libgit2_backend.rs), but it is
-# compiled everywhere so that it type-checks and its tests run during ordinary desktop work. Two
-# compile errors in that file reached a device only via a 15-minute Android CI build before this;
-# with no TLS features here the C build is quick and the desktop app never calls into it.
+# Compile libgit2 on desktop too for local type checks and tests.
 git2 = { version = "0.19", default-features = false }
 
-# Android has no `git` binary to shell out to, so there it talks git over an embedded libgit2.
-# Vendored so nothing needs to be present on the device, HTTPS-only (no SSH) to avoid also
-# vendoring libssh2. Cargo unions these features with the ones above for the Android target.
+# Android embeds libgit2 and OpenSSL for HTTP(S) sync without system libraries.
 [target.'cfg(target_os = "android")'.dependencies]
 git2 = { version = "0.19", default-features = false, features = ["vendored-openssl", "vendored-libgit2", "https"] }
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true

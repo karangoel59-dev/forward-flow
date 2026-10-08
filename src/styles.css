@@ -83,7 +83,7 @@ body {
   letter-spacing: 0.04em;
 }
 
-/* ----------------------------------------------------------- writing */
+/* writing */
 
 #write {
   height: 100%;
@@ -147,7 +147,7 @@ body {
   transition: opacity 260ms ease-in;
 }
 
-/* ----------------------------------------------------------- overlays */
+/* overlays */
 
 .veil {
   position: fixed;
@@ -372,7 +372,7 @@ body {
   flex-wrap: wrap;
 }
 
-/* ----------------------------------------------------------- hud & hints */
+/* hud & hints */
 
 kbd {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, system-ui, sans-serif;
@@ -433,7 +433,7 @@ kbd {
   transform: translateX(-50%) translateY(0);
 }
 
-/* ----------------------------------------------------- phase 2: viewer */
+/* viewer */
 
 .section-label {
   font-size: 0.72rem;
@@ -572,12 +572,7 @@ kbd {
   color: var(--dim);
 }
 
-/* ------------------------------------------------------ touch controls
-   Everything here is driven by ⌘-chords a phone has no way to type, so on a
-   touch-primary device the key hints are replaced by the buttons they named.
-   Desktop never sees any of this. `touch` is set on <html> by main.ts rather
-   than keyed off a media query here, so that one misjudged query can't leave a
-   phone with no way to commit at all. */
+/* Touch controls are enabled by main.ts. */
 
 .touchbar,
 .row-unlink {
@@ -590,8 +585,7 @@ kbd {
   align-items: center;
 }
 
-/* No boxes or fills — the tap target is padded well past the glyphs so it
-   stays thumb-sized while still reading as quiet text. */
+/* Pad touch targets beyond the visible text. */
 :root.touch .touchbar button,
 :root.touch .row-unlink {
   font: inherit;

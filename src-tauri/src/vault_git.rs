@@ -1,14 +1,4 @@
-//! Keeps the vault in git: every change is committed, then pushed to `origin` in the background.
-//!
-//! Git trouble never blocks or fails a save. By the time any of this runs the entry is already on
-//! disk; a missing git, a bad network or a rejected push only changes the status the UI shows,
-//! and the push is simply tried again on the next save or launch.
-//!
-//! Two backends implement the actual git work, chosen by platform: desktop shells out to the
-//! system's own `git` (`shell.rs`), because one is normally already installed and that gets every
-//! feature of it for free; Android has no such binary, so it talks git over an embedded libgit2
-//! instead (`libgit2_backend.rs`, HTTPS-remotes-only — see that file for why). Everything below
-//! this point — the sync queue, status events, `record()` — is the same either way.
+//! Background vault commits and sync: system git on desktop, libgit2 on Android.
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -17,9 +7,7 @@ use std::thread;
 use tauri::{AppHandle, Emitter, Runtime};
 
 mod shell;
-// Compiled on every platform, but wired up only on Android below. Keeping it in the desktop build
-// is what lets `cargo check` and `cargo test` see it at all: its own tests never ran anywhere
-// while it was cfg'd out, and type errors in it surfaced only from an Android CI build.
+// Compile on desktop too so Android code and tests are checked locally.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod libgit2_backend;
 
@@ -95,8 +83,7 @@ fn request_push<R: Runtime>(app: AppHandle<R>, dir: PathBuf, announce: bool) {
             }
         }
 
-        // Decide whether to stop under the same lock that new requests take, so a save arriving
-        // right now is either seen here or starts a fresh push: never dropped.
+        // Check under the request lock so a concurrent save cannot be dropped.
         let mut state = PUSH.lock().unwrap_or_else(|e| e.into_inner());
         if state.pending.is_empty() {
             state.running = false;
@@ -106,8 +93,7 @@ fn request_push<R: Runtime>(app: AppHandle<R>, dir: PathBuf, announce: bool) {
     });
 }
 
-/// Records a change: commits whatever is new in the vault, then pushes. Returns immediately; the
-/// work happens in the background so writing is never slowed or blocked by git.
+/// Commits and pushes in the background; the caller has already saved to disk.
 pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, announce: bool) {
     let app = app.clone();
     thread::spawn(move || {
@@ -124,16 +110,12 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, ann
     });
 }
 
-/// The vault's remote URL, if it has one — for the remote-setup screen to show what's configured
-/// already (this is the whole URL, credentials included, so the caller decides how much of it is
-/// safe to display).
+/// Returns the remote URL, including credentials; mask it before displaying.
 pub fn get_remote(dir: &std::path::Path) -> Option<String> {
     backend::get_remote(dir)
 }
 
-/// Points the vault at `url` and immediately tries a push, so a bad URL or an unreachable host is
-/// reported right away — through the same sync-status event a save's push would use — instead of
-/// waiting silently until the next entry.
+/// Sets the remote and queues a push, reporting failures through sync-status.
 pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> Result<(), String> {
     backend::set_remote(&dir, &url)?;
     request_push(app.clone(), dir, true);
@@ -181,12 +163,7 @@ pub fn start_background_sync(app: AppHandle) {
     });
 }
 
-// ---------------------------------------------------------------- tests
-//
-// These exercise the background queue (record -> commit -> push -> status event) through
-// whichever backend this platform dispatches to — `shell` on every host these tests actually run
-// on. `shell.rs` and `libgit2_backend.rs` each additionally test their own commit/push logic
-// directly.
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -250,9 +227,7 @@ mod tests {
             record(app.handle(), dir.clone(), format!("Add entry {}", i), true);
         }
 
-        // Saves race each other, and a commit stages the whole vault, so one commit can carry a
-        // neighbour's file and fewer than 8 commits is fine. What must hold: nothing is left
-        // uncommitted, every entry reaches the remote, and the remote ends at the local head.
+        // Commits may include several saves; every entry must reach the remote.
         wait_until("all 8 saves to be pushed", || {
             let local = git(&dir, &["rev-parse", "HEAD"]).unwrap_or_default();
             let pushed = git(&remote, &["rev-parse", "main"]).unwrap_or_default();

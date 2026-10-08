@@ -3,10 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-// The ⌘-chords this app runs on don't exist on a phone. Rather than trust a single media query
-// (Android's WebView has been known to answer `hover`/`pointer` unreliably), OR several signals
-// together: a false positive just shows a few extra buttons on a mouse-and-keyboard device with
-// a touchscreen, but a false negative strands a phone with no way to commit or open the picker.
+// Combine touch signals because Android WebView media queries can be unreliable.
 if (
   navigator.maxTouchPoints > 0 ||
   window.matchMedia("(hover: none) and (pointer: coarse)").matches ||
@@ -64,7 +61,6 @@ const remoteView = el<HTMLElement>("remote");
 const remoteCurrent = el<HTMLElement>("remote-current");
 const remoteUrlInput = el<HTMLInputElement>("remote-url");
 
-// Touch stand-ins for the ⌘-chords; hidden by CSS unless the device is touch-primary.
 const touchTags = el<HTMLButtonElement>("touch-tags");
 const touchResync = el<HTMLButtonElement>("touch-resync");
 const touchDelete = el<HTMLButtonElement>("touch-delete");
@@ -85,7 +81,7 @@ let readerOrigin: Mode = "write";
 let linkFor: string | null = null;
 let committing = false;
 
-// ---------------------------------------------------------------- hud
+// hud
 
 let hudTimer = 0;
 function hud(msg: string, ms = 1900) {
@@ -95,7 +91,7 @@ function hud(msg: string, ms = 1900) {
   hudTimer = window.setTimeout(() => hudEl.classList.remove("show"), ms);
 }
 
-// ------------------------------------------------- autosizing type
+// autosizing type
 
 const MAX_PX = 34;
 const MIN_PX = 17;
@@ -136,14 +132,12 @@ function fit(force = false) {
   }
 
   if (isTypingForward) {
-    // If text already fits at current font size, do nothing.
-    // Prevents jitter, reflows, and zoom oscillation on spaces and characters.
+    // Keep the font stable while typing to avoid reflow jitter.
     editor.style.fontSize = `${currentFontSize}px`;
     if (editor.scrollHeight <= editor.clientHeight) {
       return;
     }
 
-    // Overflowed at currentFontSize; monotonically shrink down
     let lo = MIN_PX;
     let hi = currentFontSize - 1;
     let best = MIN_PX;
@@ -160,7 +154,6 @@ function fit(force = false) {
     currentFontSize = best;
     editor.style.fontSize = `${currentFontSize}px`;
   } else {
-    // Force recalculate or text deleted (backspace / cut / selection delete)
     let lo = MIN_PX;
     let hi = MAX_PX;
     let best = MIN_PX;
@@ -195,7 +188,7 @@ function scheduleFit(force = false) {
   });
 }
 
-// ---------------------------------------------------------------- draft
+// draft
 
 let draftTimer = 0;
 function scheduleDraftSave() {
@@ -205,7 +198,7 @@ function scheduleDraftSave() {
   }, 700);
 }
 
-// ---------------------------------------------------------------- modes
+// modes
 
 function show(next: Mode) {
   if (next !== "reader") resetDeleteConfirmation();
@@ -235,10 +228,8 @@ function formatDate(raw: string) {
   return d.toLocaleString(undefined, { dateStyle: "long", timeStyle: "short" });
 }
 
-// ---------------------------------------------------------------- sync
+// sync
 
-// The backend commits and pushes every save in the background and reports how it went. A save
-// never waits on this: the entry is already on disk, and a failed push is retried next time.
 type SyncStatus = { state: "synced" | "offline" | "error"; detail: string };
 
 listen<SyncStatus>("sync-status", (event) => {
@@ -277,7 +268,7 @@ async function resync() {
   }
 }
 
-// ---------------------------------------------------------------- commit
+// commit
 
 async function commit() {
   if (committing) return;
@@ -312,7 +303,7 @@ async function commit() {
   }
 }
 
-// ---------------------------------------------------------------- reader
+// reader
 
 function renderTags() {
   readerTags.replaceChildren();
@@ -352,8 +343,7 @@ function renderRelated() {
 
     li.append(top, preview);
 
-    // Touch-only: `x` unlinks the selected row on a keyboard, but there is no
-    // selection to speak of when every row is tappable, so each carries its own.
+    // Each touch row needs an unlink button because there is no keyboard selection.
     const unlink = document.createElement("button");
     unlink.type = "button";
     unlink.className = "row-unlink";
@@ -397,7 +387,7 @@ async function openEntry(path: string, remember = true) {
   }
 }
 
-// ---------------------------------------------------------------- tagging
+// tagging
 
 function beginTagEdit() {
   if (!current) return;
@@ -433,7 +423,7 @@ async function saveTags() {
   }
 }
 
-// ---------------------------------------------------------------- linking
+// linking
 
 async function beginLink() {
   if (!current) return;
@@ -471,7 +461,7 @@ async function unlinkSelected() {
   }
 }
 
-// ---------------------------------------------------------------- delete
+// delete
 
 let deleteConfirmTimer = 0;
 let deletePendingPath: string | null = null;
@@ -505,7 +495,7 @@ async function deleteCurrentEntry() {
   }
 }
 
-// ---------------------------------------------------------------- picker
+// picker
 
 function sortEntries(list: EntryMeta[]): EntryMeta[] {
   const out = list.slice();
@@ -527,7 +517,6 @@ function renderPicker() {
   const raw = pickerFilter.value.trim().toLowerCase();
   let pool = entries;
 
-  // In link mode you cannot link an entry to itself.
   if (linkFor) pool = pool.filter((e) => e.path !== linkFor);
 
   if (raw.startsWith("#")) {
@@ -633,7 +622,7 @@ function leavePicker() {
   }
 }
 
-// ---------------------------------------------------------------- vault
+// vault
 
 async function chooseVault() {
   try {
@@ -648,15 +637,11 @@ async function chooseVault() {
     hud("folder set");
     show("write");
   } catch (e) {
-    // Notably hit on Android: tauri-plugin-dialog has no folder picker on mobile, so `open()`
-    // itself rejects there. `boot()` doesn't call this on Android — it provisions a vault in
-    // app storage on its own — but keep this caught rather than silently doing nothing, in
-    // case the setup screen is ever reachable there some other way.
     hud(String(e));
   }
 }
 
-// -------------------------------------------------------------- remote
+// remote
 
 /** `https://user:token@host/...` -> `https://user:••••@host/...`. Display only, never reused. */
 function maskRemote(url: string): string {
@@ -693,7 +678,7 @@ async function saveRemote() {
   }
 }
 
-// ---------------------------------------------------------------- keys
+// keys
 
 async function toggleFullscreen() {
   try {
@@ -776,7 +761,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // ------------------------------------------------------------ reader
+  // reader
   if (mode === "reader") {
     if (tagEditing) return;
 
@@ -816,7 +801,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // ------------------------------------------------------------ picker
+  // picker
   if (mode === "picker") {
     if (mod && e.key.toLowerCase() === "t") {
       e.preventDefault();
@@ -840,7 +825,7 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ---------------------------------------------------------------- wire-up
+// wire-up
 
 editor.addEventListener("keydown", (e) => {
   if (!editor.readOnly && e.key === "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -898,9 +883,7 @@ document.addEventListener("visibilitychange", () => {
 
 window.addEventListener("resize", () => scheduleFit(true));
 
-// Keep focus on the page: clicking anywhere in write mode returns to the caret.
-// The touch controls are the exception — swallowing their mousedown would stop
-// the tap from ever becoming a click.
+// Preserve touch-button clicks when returning focus to the editor.
 document.addEventListener("mousedown", (e) => {
   const target = e.target as HTMLElement | null;
   if (mode === "write" && target !== editor && !target?.closest(".touchbar")) {
