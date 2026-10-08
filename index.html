@@ -8,7 +8,7 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <!-- first run: pick a vault folder -->
+
     <section id="setup" class="veil" hidden>
       <div class="setup-inner">
         <p class="setup-line">Where should your entries live?</p>
@@ -17,7 +17,6 @@
       </div>
     </section>
 
-    <!-- the writing surface -->
     <main id="write">
       <textarea
         id="editor"
@@ -27,7 +26,7 @@
         autocapitalize="off"
         placeholder="Begin."
       ></textarea>
-      <!-- a phone has no ⌘: touch-only stand-ins for ⌘O, ⌘⇧G and ⌘↵ -->
+
       <nav class="touchbar touchbar-top">
         <button id="touch-entries" type="button">entries</button>
         <button id="touch-resync" type="button">sync</button>
@@ -37,7 +36,6 @@
       <div id="write-count" class="hint write-count" hidden></div>
     </main>
 
-    <!-- read-only view of a committed entry -->
     <section id="reader" class="veil" hidden>
       <article class="reader-inner">
         <header class="reader-head">
@@ -82,7 +80,6 @@
       </article>
     </section>
 
-    <!-- keyboard-driven entry list -->
     <section id="picker" class="veil" hidden>
       <div class="picker-inner">
         <div id="picker-head" class="picker-head hint" hidden></div>
@@ -110,7 +107,6 @@
       </div>
     </section>
 
-    <!-- where entries sync to -->
     <section id="remote" class="veil" hidden>
       <div class="setup-inner remote-inner">
         <p class="setup-line">Sync entries to a git remote</p>

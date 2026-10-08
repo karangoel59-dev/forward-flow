@@ -1,29 +1,11 @@
-//! The Android backend: talks git over `libgit2` instead of shelling out.
-//!
-//! Android has no `git` binary and no shell PATH to find one on, so the desktop backend's
-//! approach (`../shell.rs`) does not work there. This backend embeds libgit2 (via the `git2`
-//! crate, vendored so nothing has to be present on the device) and reimplements the same three
-//! operations: make the vault a repo, commit everything new, and push (merging in the remote's
-//! own changes first when needed).
-//!
-//! Two differences from the desktop backend, both because of the constraints of running inside
-//! a sandboxed mobile app rather than a full OS with a configured git:
-//!
-//! - **Only `http://`/`https://` remotes are supported**, with credentials embedded directly in
-//!   the URL (`https://user:TOKEN@host/owner/repo.git`). There is no SSH agent, no `~/.ssh`, and
-//!   no credential helper to fall back to on Android, so a personal access token in the URL is
-//!   the one auth path that works without more UI than this app has today.
-//! - **A real merge commit, not a rebase**, when the remote has commits we do not. libgit2 has no
-//!   rebase-with-autostash equivalent to reach for the way the desktop backend uses `git pull
-//!   --rebase --autostash`; a merge commit gives the same guarantee (nothing is lost, both
-//!   machines' entries end up in history) at the cost of a less linear log.
+//! Android git backend: HTTP(S) remotes with URL credentials and merge-based sync.
 
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
 use git2::{
-    build::CheckoutBuilder, BranchType, CertificateCheckStatus, Cred, CredentialType, FetchOptions,
+    build::CheckoutBuilder, BranchType, Cred, CredentialType, FetchOptions,
     IndexAddOption, PushOptions, RemoteCallbacks, Repository, RepositoryInitOptions, Signature,
 };
 
@@ -36,20 +18,15 @@ fn msg(e: git2::Error) -> String {
     e.message().to_string()
 }
 
-// ------------------------------------------------------------ TLS trust roots
+// TLS trust roots
 
-/// Android keeps its trust store in the Java runtime, not as PEM files on disk, so the OpenSSL
-/// this crate is statically linked against finds no certificate authorities at all and rejects
-/// every TLS handshake — pushes fail with "the SSL certificate is invalid" no matter how valid
-/// the server's certificate is. Ship Mozilla's roots with the app and point libgit2 at them.
+/// Vendored OpenSSL needs PEM trust roots because Android exposes its store through Java.
 const CA_BUNDLE: &[u8] = include_bytes!("../../assets/cacert.pem");
 
-/// Written into the vault (the one directory guaranteed writable before a repo even exists), so
-/// `ensure_repo` also keeps it out of the commits.
+/// Keep the extracted CA bundle out of vault commits.
 const CA_BUNDLE_NAME: &str = ".forward-flow-cacert.pem";
 
-/// Extracts the bundle next to the vault and registers it with libgit2. Idempotent, and cheap
-/// enough after the first call to just run at the top of every entry point below.
+/// Extracts and registers the bundled trust roots.
 fn ensure_ca_bundle(vault: &Path) {
     let path = vault.join(CA_BUNDLE_NAME);
     let needs_write = match fs::metadata(&path) {
@@ -60,20 +37,15 @@ fn ensure_ca_bundle(vault: &Path) {
         return;
     }
 
-    // `set_ssl_cert_file` is the one that actually matters: it sets the locations on libgit2's
-    // SSL context whenever it is called. SSL_CERT_FILE is only read by OpenSSL once, during the
-    // global init that the first `Repository::open` of the process triggers, so on its own it
-    // would be a race with whichever entry point ran first — it is set here purely as a backstop
-    // for any OpenSSL path that reads the environment directly.
+    // SSL_CERT_FILE covers OpenSSL initialization; the libgit2 option updates its context.
     std::env::set_var("SSL_CERT_FILE", &path);
-    // Safe in the sense that matters here: this mutates libgit2 global state, and every caller
-    // reaches it through vault_git's single-threaded push queue.
+    // This updates libgit2 process-wide TLS configuration.
     unsafe {
         let _ = git2::opts::set_ssl_cert_file(path.as_path());
     }
 }
 
-// ---------------------------------------------------------------- repository
+// repository
 
 /// Makes `dir` a git repository if it is not one yet. Safe to call every time.
 pub fn ensure_repo(dir: &Path) -> Result<(), String> {
@@ -86,8 +58,7 @@ pub fn ensure_repo(dir: &Path) -> Result<(), String> {
         Repository::init_opts(dir, &opts).map_err(msg)?
     };
 
-    // Commits need an author. Use whatever identity is configured (there usually is none at all
-    // on a fresh Android install); only if there is none fall back to a local one.
+    // Use a local fallback identity when none is configured.
     let has_identity = repo
         .config()
         .and_then(|c| c.get_string("user.email"))
@@ -99,8 +70,7 @@ pub fn ensure_repo(dir: &Path) -> Result<(), String> {
         local.set_str("user.name", "Forward Flow").map_err(msg)?;
     }
 
-    // Rewritten rather than only created, so that vaults set up before the CA bundle existed
-    // still learn to ignore it instead of committing 188KB of certificates.
+    // Update older vaults too so the CA bundle stays untracked.
     let ignore = dir.join(".gitignore");
     let existing = fs::read_to_string(&ignore).unwrap_or_default();
     let mut wanted = existing.clone();
@@ -133,8 +103,7 @@ pub fn commit_all(dir: &Path, message: &str) -> Result<bool, String> {
 
     let mut index = repo.index().map_err(msg)?;
     index.add_all(["*"], IndexAddOption::DEFAULT, None).map_err(msg)?;
-    // `add_all` alone mirrors `git add <path>` (new + modified); files removed from the working
-    // tree also need `update_all` to be staged as deletions, matching `git add -A`.
+    // update_all also stages deletions, matching git add -A.
     index.update_all(["*"], None).map_err(msg)?;
     index.write().map_err(msg)?;
     let tree = repo.find_tree(index.write_tree().map_err(msg)?).map_err(msg)?;
@@ -151,7 +120,7 @@ pub fn commit_all(dir: &Path, message: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-// ---------------------------------------------------------------- pushing
+// pushing
 
 fn remote_name(repo: &Repository) -> Option<String> {
     let names = repo.remotes().ok()?;
@@ -168,9 +137,6 @@ pub fn get_remote(dir: &Path) -> Option<String> {
     ensure_ca_bundle(dir);
     let repo = Repository::open(dir).ok()?;
     let name = remote_name(&repo)?;
-    // `find_remote(...).ok()?` as part of the tail expression ties the temporary `Remote`'s drop
-    // to `repo`'s in a way the borrow checker won't accept (same shape as the push_once fix
-    // earlier this session) — bind it first so it's dropped, in order, before `repo` is.
     let remote = repo.find_remote(&name).ok()?;
     remote.url().map(String::from)
 }
@@ -188,8 +154,7 @@ pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Pulls `user:pass` (or `user:token`) straight out of an `https://user:pass@host/...` URL. This
-/// is the only credential source on Android: no SSH agent, no keychain, no credential helper.
+/// Android credentials come from the remote URL; no credential helper is available.
 fn url_credentials(url: &str) -> Option<(String, String)> {
     let after_scheme = url.split("://").nth(1)?;
     let userinfo = after_scheme.split('/').next()?.split('@').next()?;
@@ -266,9 +231,7 @@ enum Attempt {
     Err(String),
 }
 
-/// One push attempt. `Rejected` means libgit2 talked to the remote fine but it refused the ref
-/// update (almost always a non-fast-forward), as opposed to `Err`, which is a connection or auth
-/// problem the caller should not try to recover from by merging.
+/// Distinguishes rejected ref updates from connection or authentication errors.
 fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let mut remote = match repo.find_remote(remote_name) {
         Ok(r) => r,
@@ -290,8 +253,8 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let rejected = std::cell::RefCell::new(None::<String>);
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     callbacks.push_update_reference(|_refname, status| {
         if let Some(reason) = status {
@@ -305,9 +268,6 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     let result = remote.push(&[refspec.as_str()], Some(&mut opts));
 
-    // `opts` (and the closure it owns, still borrowing `rejected`) lives until the end of this
-    // scope, so `rejected` can't be moved out of here yet — clone its contents through the
-    // borrow instead.
     match result {
         Ok(()) => match rejected.borrow().clone() {
             Some(_) => Attempt::Rejected,
@@ -327,16 +287,14 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     }
 }
 
-/// Fetches the remote branch and either fast-forwards onto it, or, if both sides moved on,
-/// folds it into a merge commit. Entries are timestamped files, so this is almost always a
-/// conflict-free three-way merge.
+/// Fetches and fast-forwards or merges the remote branch.
 fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), String> {
     let mut remote = repo.find_remote(remote_name).map_err(msg)?;
     let url = remote.url().unwrap_or("").to_string();
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
@@ -351,12 +309,21 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
         return Ok(());
     }
 
+    // Network work is finished. Keep only checkout/ref writes under the entry-write lock.
+    let _write = crate::VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut status_options = git2::StatusOptions::new();
+    status_options.include_untracked(true).include_ignored(false);
+    if !repo.statuses(Some(&mut status_options)).map_err(msg)?.is_empty() {
+        return Err("local vault changes are awaiting a commit; retry sync after saving".into());
+    }
+
     let branch_ref_name = format!("refs/heads/{branch}");
     if analysis.is_fast_forward() {
+        let tree = repo.find_commit(fetch_commit.id()).and_then(|c| c.tree()).map_err(msg)?;
+        repo.checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe())).map_err(msg)?;
         let mut branch_ref = repo.find_reference(&branch_ref_name).map_err(msg)?;
         branch_ref.set_target(fetch_commit.id(), "forward-flow: fast-forward").map_err(msg)?;
         repo.set_head(&branch_ref_name).map_err(msg)?;
-        repo.checkout_head(Some(CheckoutBuilder::new().force())).map_err(msg)?;
         return Ok(());
     }
 
@@ -370,6 +337,7 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     let tree = repo.find_tree(merged_index.write_tree_to(repo).map_err(msg)?).map_err(msg)?;
 
     let sig = signature(repo)?;
+    repo.checkout_tree(tree.as_object(), Some(CheckoutBuilder::new().safe())).map_err(msg)?;
     repo.commit(
         Some("HEAD"),
         &sig,
@@ -379,7 +347,6 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
         &[&local_commit, &remote_commit],
     )
     .map_err(msg)?;
-    repo.checkout_head(Some(CheckoutBuilder::new().force())).map_err(msg)?;
     Ok(())
 }
 
@@ -437,8 +404,8 @@ fn push_refspec(repo: &Repository, refspec: &str) {
 
     let mut callbacks = RemoteCallbacks::new();
     if url.starts_with("http://") || url.starts_with("https://") {
+        // Keep libgit2's certificate and hostname validation against our CA bundle.
         callbacks.credentials(credentials_callback(url));
-        callbacks.certificate_check(|_cert, _host| Ok(CertificateCheckStatus::CertificateOk));
     }
     let mut opts = PushOptions::new();
     opts.remote_callbacks(callbacks);
@@ -486,7 +453,6 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
         Err(_) => return Ok(()), // nothing committed yet
     };
 
-    // 1. Create or advance tag branches
     for tag in active_tags {
         let tag = tag.trim();
         if tag.is_empty() {
@@ -504,7 +470,6 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
         }
     }
 
-    // 2. Delete orphaned tag branches
     if let Ok(branches) = repo.branches(Some(BranchType::Local)) {
         for item in branches.flatten() {
             let (mut branch, _) = item;
@@ -523,13 +488,7 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
     Ok(())
 }
 
-// ---------------------------------------------------------------- tests
-//
-// These exercise the libgit2 backend directly (bypassing the platform dispatcher in
-// `vault_git.rs`, which only routes here `#[cfg(target_os = "android")]`), against bare remotes
-// set up with the real `git` CLI via `shell::test_support`. They compile only for Android, so
-// running them needs an Android target test runner (there is none in this workspace); the
-// Android CI build (`tauri android build`) is what actually compiles this module today.
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -578,9 +537,6 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The bare remote created by `shell::test_support::bare_remote` has no credentials, but a
-    /// filesystem-path "remote" is not http(s) at all, so the push is rejected before libgit2
-    /// even needs any — this is the same guardrail real android:// setups rely on.
     #[test]
     fn a_non_https_remote_is_rejected_up_front() {
         let dir = fresh("lg2-scheme");
@@ -623,7 +579,6 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The Android vault in the wild already has a .gitignore from before the bundle existed.
     #[test]
     fn an_older_vault_learns_to_ignore_the_ca_bundle_without_losing_what_it_had() {
         let dir = fresh("lg2-ca-upgrade");
@@ -679,6 +634,51 @@ mod tests {
     }
 
     #[test]
+    fn remote_updates_preserve_uncommitted_files_and_head() {
+        // Exercise fast-forwards and merges with edits, deletions, and untracked entries.
+        for diverged in [false, true] {
+            let suffix = if diverged { "merge" } else { "ff" };
+            let remote = bare_remote(&format!("lg2-merge-dirty-remote-{suffix}"));
+            let local = fresh(&format!("lg2-merge-dirty-local-{suffix}"));
+            let peer = fresh(&format!("lg2-merge-dirty-peer-{suffix}"));
+            ensure_repo(&local).unwrap();
+            write(&local, "edited.md", "original\n");
+            write(&local, "deleted.md", "original\n");
+            commit_all(&local, "initial").unwrap();
+            add_remote(&local, &remote);
+            assert_eq!(push(&local), SyncOutcome::Synced);
+            fs::remove_dir_all(&peer).unwrap();
+            git(&std::env::temp_dir(), &["clone", "--quiet", remote.to_str().unwrap(), peer.to_str().unwrap()]).unwrap();
+            ensure_repo(&peer).unwrap();
+            if diverged {
+                write(&local, "local.md", "committed local entry\n");
+                commit_all(&local, "local").unwrap();
+            }
+            write(&peer, "remote.md", "remote entry\n");
+            commit_all(&peer, "remote").unwrap();
+            assert_eq!(push(&peer), SyncOutcome::Synced);
+
+            write(&local, "edited.md", "pending tags\n");
+            fs::remove_file(local.join("deleted.md")).unwrap();
+            write(&local, "new.md", "pending entry\n");
+            let before = git(&local, &["rev-parse", "HEAD"]).unwrap();
+            assert!(pull_and_merge(&local).unwrap_err().contains("awaiting a commit"));
+            assert_eq!(git(&local, &["rev-parse", "HEAD"]).unwrap(), before);
+            assert_eq!(fs::read_to_string(local.join("edited.md")).unwrap(), "pending tags\n");
+            assert!(!local.join("deleted.md").exists());
+            assert_eq!(fs::read_to_string(local.join("new.md")).unwrap(), "pending entry\n");
+
+            commit_all(&local, "pending changes").unwrap();
+            assert!(pull_and_merge(&local).unwrap());
+            assert!(local.join("remote.md").exists());
+            assert_eq!(fs::read_to_string(local.join("edited.md")).unwrap(), "pending tags\n");
+            assert!(!local.join("deleted.md").exists());
+            assert!(git(&local, &["status", "--porcelain"]).unwrap().trim().is_empty());
+            for dir in [&local, &peer, &remote] { fs::remove_dir_all(dir).unwrap(); }
+        }
+    }
+
+    #[test]
     fn lg2_unrelated_histories_are_merged_successfully() {
         let remote = bare_remote("lg2-unrelated-remote");
         // Remote gets an initial commit (e.g. GitHub README)
@@ -713,15 +713,13 @@ mod tests {
         ensure_repo(&dir).unwrap();
         commit_all(&dir, "first").unwrap();
 
-        // 1. Add tags "ideas" and "work"
         sync_tag_branches(&dir, &[ "ideas".into(), "work".into() ]).unwrap();
         let repo = Repository::open(&dir).unwrap();
         assert!(repo.find_branch("tag/ideas", BranchType::Local).is_ok());
         assert!(repo.find_branch("tag/work", BranchType::Local).is_ok());
 
-        // 2. Remove tag "ideas", keep "work", add "life"
         sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
-        // 3. Advancing: make a second commit and re-sync tag "work"
+
         write(&dir, "b.md", "second\n");
         commit_all(&dir, "second").unwrap();
         let head2 = repo.head().unwrap().peel_to_commit().unwrap().id();

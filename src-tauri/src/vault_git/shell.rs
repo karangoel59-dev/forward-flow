@@ -1,8 +1,4 @@
-//! The desktop backend: shells out to the system's own `git` binary.
-//!
-//! This is the backend used everywhere except Android (see `../libgit2_backend.rs`), because on
-//! desktop a real `git` is normally installed already, and running it directly gets every feature
-//! (any remote scheme, credential helpers, the user's own config) for free.
+//! Desktop git backend using the system binary and its credential helpers.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,8 +11,7 @@ use super::SyncOutcome;
 /// Nothing git does here should take this long; a hung network must not wedge the queue.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// One commit (or rebase) at a time: git's own index lock would otherwise make concurrent
-/// saves fail with "another git process seems to be running".
+/// Serialize index writes to avoid git lock conflicts.
 static COMMIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Desktop apps do not inherit the shell's PATH, so look in the usual places first.
@@ -93,17 +88,15 @@ fn last_line(stderr: &str, stdout: &str) -> String {
     text.trim().lines().last().unwrap_or("git failed").trim().to_string()
 }
 
-// ---------------------------------------------------------------- repository
+// repository
 
-/// Makes `dir` a git repository if it is not one yet, so a freshly chosen folder is versioned
-/// from its first entry. Safe to call every time.
+/// Initializes the vault if needed.
 pub fn ensure_repo(dir: &Path) -> Result<(), String> {
     if !dir.join(".git").exists() {
         ok(dir, &["init", "--quiet", "--initial-branch=main"])?;
     }
 
-    // Commits need an author. Use the person's own git identity; only if there is none anywhere
-    // fall back to a local one so saving still works.
+    // Use a local fallback identity when none is configured.
     let has_identity = ok(dir, &["config", "user.email"])
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
@@ -132,7 +125,7 @@ pub fn commit_all(dir: &Path, message: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-// ---------------------------------------------------------------- pushing
+// pushing
 
 fn remote_name(dir: &Path) -> Option<String> {
     let remotes = ok(dir, &["remote"]).ok()?;
@@ -161,8 +154,7 @@ pub fn set_remote(dir: &Path, url: &str) -> Result<(), String> {
 
 fn looks_offline(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    // A refused key or a missing repository also ends in "could not read from remote", but that
-    // is a setup problem to report, not a connection to wait out.
+    // Authentication and missing repositories are setup errors, not transient outages.
     if m.contains("permission denied") || m.contains("authentication failed") || m.contains("not found") {
         return false;
     }
@@ -197,8 +189,7 @@ fn classify(err: String) -> SyncOutcome {
     }
 }
 
-/// Pushes the current branch, first bringing in anything the remote gained since. Entries are
-/// timestamped files, so merging another machine's work is almost always conflict-free.
+/// Pushes the current branch, rebasing remote changes first if rejected as behind.
 pub fn push(dir: &Path) -> SyncOutcome {
     let Some(remote) = remote_name(dir) else {
         return SyncOutcome::NoRemote;
@@ -285,7 +276,6 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
     let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let remote = remote_name(dir);
 
-    // 1. Create or advance tag branches
     for tag in active_tags {
         let tag = tag.trim();
         if tag.is_empty() {
@@ -309,7 +299,6 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
         }
     }
 
-    // 2. Delete orphaned tag branches
     let local_branches = match ok(dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]) {
         Ok(s) => s.lines().map(str::trim).map(String::from).collect::<Vec<_>>(),
         Err(_) => Vec::new(),
@@ -329,11 +318,8 @@ pub fn sync_tag_branches(dir: &Path, active_tags: &[String]) -> Result<(), Strin
     Ok(())
 }
 
-// ---------------------------------------------------------------- shared test helpers
-//
-// Exposed to sibling backend test modules too, so the libgit2 backend's tests can set up and
-// inspect fixtures (bare remotes, commit logs) with a real `git` CLI regardless of which backend
-// is under test.
+// shared test helpers
+// Shared fixtures for both git backends.
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -374,7 +360,7 @@ pub(crate) mod test_support {
     }
 }
 
-// ---------------------------------------------------------------- tests
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -497,8 +483,7 @@ mod tests {
         assert_eq!(get_remote(&dir).as_deref(), Some(second_remote.to_str().unwrap()));
         assert_eq!(push(&dir), SyncOutcome::Synced);
         assert_eq!(log(&second_remote), vec!["first"]);
-        // An empty bare repo has no HEAD to log at all — `git log` errors rather than returning
-        // nothing, which is itself the confirmation that first_remote never received a push.
+        // An empty remote has no HEAD, so git log must fail.
         assert!(
             git(&first_remote, &["log", "--format=%s"]).is_err(),
             "the old remote never saw the push"
@@ -610,7 +595,6 @@ mod tests {
         commit_all(&dir, "first").unwrap();
         push(&dir);
 
-        // 1. Add tags "ideas" and "work"
         sync_tag_branches(&dir, &[ "ideas".into(), "work".into() ]).unwrap();
         let branches = ok(&dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
         assert!(branches.contains("tag/ideas"));
@@ -619,7 +603,6 @@ mod tests {
         assert!(remote_branches.contains("tag/ideas"));
         assert!(remote_branches.contains("tag/work"));
 
-        // 2. Remove tag "ideas", keep "work", add "life"
         sync_tag_branches(&dir, &[ "work".into(), "life".into() ]).unwrap();
         let branches2 = ok(&dir, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
         assert!(!branches2.contains("tag/ideas"), "tag/ideas should be deleted");
@@ -627,7 +610,7 @@ mod tests {
         assert!(branches2.contains("tag/life"));
         let remote_branches2 = ok(&remote, &["for-each-ref", "--format=%(refname:short)", "refs/heads/tag/*"]).unwrap();
         assert!(!remote_branches2.contains("tag/ideas"), "tag/ideas deleted on remote");
-        // 3. Advancing: make a second commit and re-sync tag "work"
+
         write(&dir, "b.md", "second\n");
         commit_all(&dir, "second").unwrap();
         let head2 = ok(&dir, &["rev-parse", "HEAD"]).unwrap();

@@ -2,11 +2,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
+
+// Protect the brief filesystem phase of Android checkouts against entry mutations.
+static VAULT_WRITES: Mutex<()> = Mutex::new(());
 
 mod vault_git;
 
-// ---------------------------------------------------------------- config
+// config
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Config {
@@ -34,7 +38,7 @@ fn vault_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "no vault selected".to_string())
 }
 
-// ---------------------------------------------------------------- entries
+// entries
 
 #[derive(Serialize, Clone)]
 struct EntryMeta {
@@ -176,7 +180,7 @@ fn entry_in_vault(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-// ------------------------------------------------- metadata rewriting
+// metadata rewriting
 
 /// Rewrites only the frontmatter. The body is carried across untouched, and
 /// frontmatter keys this app does not know about are preserved verbatim.
@@ -229,7 +233,7 @@ fn rewrite_meta(
     Ok(meta_from(path, &out))
 }
 
-// ---------------------------------------------------------------- commands
+// commands
 
 fn write_config(app: &AppHandle, cfg: &Config) -> Result<(), String> {
     let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
@@ -242,12 +246,7 @@ fn get_vault(app: AppHandle) -> Option<String> {
         return Some(v);
     }
 
-    // tauri-plugin-dialog has no folder picker on mobile — its own source rejects a
-    // directory-mode `open()` outright (`Err(FolderPickerNotImplemented)`, by design in that
-    // crate, not a bug here). Rather than strand Android on the desktop setup screen waiting
-    // for a picker that will never appear, default straight to the app's own private storage;
-    // git sync to a remote (vault_git) is how entries leave an Android device, not picking a
-    // shared folder.
+    // Android has no folder picker; use private app storage and git for transfer.
     #[cfg(target_os = "android")]
     {
         let dir = app.path().app_data_dir().ok()?.join("vault");
@@ -299,8 +298,6 @@ fn read_entry(app: AppHandle, path: String) -> Result<EntryFull, String> {
     let (_, body) = split_frontmatter(&raw);
     let meta = meta_from(&target, &raw);
 
-    // Union of this entry's own links and anything pointing back at it, so a
-    // half-written pair still shows up on both sides.
     let all = collect_entries(&vault_dir(&app)?);
     let related = related_to(&all, &meta).into_iter().cloned().collect();
 
@@ -314,6 +311,7 @@ fn read_entry(app: AppHandle, path: String) -> Result<EntryFull, String> {
 /// Writes the draft to a new timestamped file and locks it. Never overwrites.
 #[tauri::command]
 fn commit_entry(app: AppHandle, content: String) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let dir = vault_dir(&app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
@@ -357,13 +355,13 @@ fn collect_active_tags(dir: &PathBuf) -> Vec<String> {
 
 #[tauri::command]
 fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let target = entry_in_vault(&app, &path)?;
     let raw = fs::read_to_string(&target).map_err(|e| e.to_string())?;
     let meta = meta_from(&target, &raw);
     let stem = meta.name.clone();
     let dir = vault_dir(&app)?;
 
-    // 1. Remove reciprocal links in other entries pointing to this entry
     for other in collect_entries(&dir) {
         if other.name != stem && other.links.contains(&stem) {
             let p = PathBuf::from(&other.path);
@@ -371,15 +369,9 @@ fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
         }
     }
 
-    // 2. Remove the file itself from the vault
     fs::remove_file(&target).map_err(|e| format!("failed to delete file: {}", e))?;
 
-    // 3. Make a git commit for the deletion (revert commit)
     vault_git::record(&app, dir.clone(), format!("Revert entry {}", stem), true);
-
-    // 4. Update tag branches in case any tags were orphaned by this deletion
-    let active = collect_active_tags(&dir);
-    vault_git::sync_tag_branches(&app, dir, active);
 
     let _ = app.emit("vault-updated", ());
     Ok(())
@@ -387,13 +379,12 @@ fn delete_entry(app: AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn set_tags(app: AppHandle, path: String, tags: Vec<String>) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let target = entry_in_vault(&app, &path)?;
     let cleaned = dedupe(tags.iter().map(|t| clean_tag(t)).collect());
     let meta = rewrite_meta(&target, Some(cleaned), None)?;
     let dir = vault_dir(&app)?;
     vault_git::record(&app, dir.clone(), format!("Tag {}", meta.name), true);
-    let active = collect_active_tags(&dir);
-    vault_git::sync_tag_branches(&app, dir, active);
     Ok(meta)
 }
 
@@ -416,8 +407,7 @@ fn remove_link(path: &PathBuf, other: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Anything this entry points at, plus anything pointing back at it, so a
-/// half-written pair still surfaces on both sides.
+/// Includes backlinks so a partially written link remains visible from both entries.
 fn related_to<'a>(all: &'a [EntryMeta], me: &EntryMeta) -> Vec<&'a EntryMeta> {
     all.iter()
         .filter(|o| o.name != me.name && (me.links.contains(&o.name) || o.links.contains(&me.name)))
@@ -427,6 +417,7 @@ fn related_to<'a>(all: &'a [EntryMeta], me: &EntryMeta) -> Vec<&'a EntryMeta> {
 /// Links are symmetric: both files record the other.
 #[tauri::command]
 fn link_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let pa = entry_in_vault(&app, &a)?;
     let pb = entry_in_vault(&app, &b)?;
     if pa == pb {
@@ -446,6 +437,7 @@ fn link_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
 
 #[tauri::command]
 fn unlink_entries(app: AppHandle, a: String, b: String) -> Result<(), String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let pa = entry_in_vault(&app, &a)?;
     let pb = entry_in_vault(&app, &b)?;
 
@@ -477,7 +469,7 @@ fn all_tags(app: AppHandle) -> Result<Vec<TagCount>, String> {
     Ok(out)
 }
 
-// ---------------------------------------------------------------- draft
+// draft
 
 fn draft_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -503,12 +495,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // Anything written outside the app, or a push that failed last time, goes out now.
-            // Only problems are reported: a quiet launch should stay quiet.
+            // Commit external changes and retry pending pushes on launch.
             if let Ok(vault) = vault_dir(app.handle()) {
                 vault_git::record(app.handle(), vault.clone(), "Sync vault".into(), false);
-                vault_git::start_background_sync(app.handle().clone(), vault);
             }
+            vault_git::start_background_sync(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -532,7 +523,7 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-// ---------------------------------------------------------------- tests
+// tests
 
 #[cfg(test)]
 mod tests {
