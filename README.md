@@ -183,3 +183,20 @@ lose anything; the draft is restored on next launch and removed on commit.
 The text sizes itself: it starts large and shrinks as the entry grows, so the
 page stays full without scrolling. Past a floor of 17px it stops shrinking and
 scrolls, keeping the line you're writing in view.
+
+## Backend layout
+
+`src-tauri/src/lib.rs` wires up plugins, startup, and the Tauri command handler.
+The backend is organized by responsibility:
+
+- `commands/`: Tauri commands for vault settings, entries, and notebooks.
+- `config.rs`: persisted vault configuration and paths.
+- `drafts.rs`: draft storage and autosave commands.
+- `entries.rs`: entry discovery, frontmatter, tags, and links.
+- `notebooks.rs`: notebook folders, path validation, and entry moves.
+- `state.rs`: the shared lock for vault writes and Android checkouts.
+- `vault_git.rs` and `vault_git/`: background sync and platform Git backends.
+
+Entry and notebook tests live alongside their modules in `entries/tests.rs` and
+`notebooks/tests.rs`. Run backend checks with
+`cargo test --manifest-path src-tauri/Cargo.toml`.

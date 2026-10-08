@@ -102,7 +102,7 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, ann
             emit(&app, "error", e);
             return;
         }
-        let active = crate::collect_active_tags(&dir);
+        let active = crate::entries::collect_active_tags(&dir);
         if let Err(e) = backend::sync_tag_branches(&dir, &active) {
             emit(&app, "error", format!("Branch sync failed: {}", e));
         }
@@ -155,7 +155,7 @@ pub fn sync_now<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, announce: bool) {
 pub fn start_background_sync(app: AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(std::time::Duration::from_secs(60));
-        if let Ok(dir) = crate::vault_dir(&app) {
+        if let Ok(dir) = crate::config::vault_dir(&app) {
             if backend::get_remote(&dir).is_some() {
                 let _ = sync_vault(&app, &dir, false);
             }

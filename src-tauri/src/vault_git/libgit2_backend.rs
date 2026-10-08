@@ -347,7 +347,7 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     }
 
     // Network work is finished. Keep only checkout/ref writes under the entry-write lock.
-    let _write = crate::VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let _write = crate::state::VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
     let mut status_options = git2::StatusOptions::new();
     status_options.include_untracked(true).include_ignored(false);
     if !repo.statuses(Some(&mut status_options)).map_err(msg)?.is_empty() {
