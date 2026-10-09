@@ -1,3 +1,5 @@
+import { setupSettings } from "./settings";
+import { setupChat } from "./chat";
 import { renderMarkdown, externalMarkdownUrl } from "./markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -26,7 +28,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook" | "chat";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -145,6 +147,13 @@ async function moveCurrentEntry() {
   }
 }
 
+let chatOrigin: Mode = "write";
+const chatController = setupChat(() => show(chatOrigin), message => hud(message, 5000));
+async function openNotebookChat(notebook: string) {
+  if (notebook === "*") { hud("Choose a notebook or Inbox to chat."); return; }
+  const origin = mode;
+  if (await chatController.open(notebook)) { chatOrigin = origin; show("chat"); }
+}
 const win = getCurrentWindow();
 
 let mode: Mode = "write";
@@ -287,6 +296,7 @@ function show(next: Mode) {
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
   notebookView.hidden = next !== "notebook";
+  el<HTMLElement>("chat").hidden = next !== "chat";
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
   if (next === "write") {
@@ -604,6 +614,7 @@ function renderPicker() {
 
   pickerNotebook.disabled = !!linkFor;
   el<HTMLButtonElement>("picker-new-notebook").hidden = !!linkFor;
+  el<HTMLButtonElement>("picker-chat").hidden = !!linkFor;
   if (linkFor) pool = pool.filter((e) => e.path !== linkFor);
   else if (pickerNotebook.value !== "*") pool = pool.filter(e => (e.notebook || "") === pickerNotebook.value);
 
@@ -807,11 +818,12 @@ remoteUrlInput.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (!el<HTMLElement>("config-review").hidden) return;
   const mod = e.metaKey || e.ctrlKey;
   const typing =
     e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
 
-  if (mode === "notebook") return;
+  if (mode === "notebook" || mode === "chat") return;
   if (e.target instanceof HTMLSelectElement && !mod) return;
 
   if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "f") {
@@ -960,6 +972,9 @@ readerBody.addEventListener("click", (event) => {
   else hud("Use a full http, https, or mailto link.");
 });
 
+el<HTMLButtonElement>("write-chat").addEventListener("click", () => openNotebookChat(writeNotebook.value));
+el<HTMLButtonElement>("picker-chat").addEventListener("click", () => openNotebookChat(pickerNotebook.value));
+
 el<HTMLButtonElement>("write-new-notebook").addEventListener("click", beginNotebook);
 el<HTMLButtonElement>("picker-new-notebook").addEventListener("click", beginNotebook);
 el<HTMLButtonElement>("reader-move").addEventListener("click", moveCurrentEntry);
@@ -1044,4 +1059,12 @@ async function boot() {
   fit(true);
 }
 
+setupSettings(async () => {
+  remoteUrlInput.value = "";
+  if (await invoke<string | null>("get_vault")) {
+    await loadNotebooks();
+    if (mode === "setup") show("write");
+    else if (mode === "remote") await openRemote();
+  }
+}, text => hud(text, 7000));
 boot();

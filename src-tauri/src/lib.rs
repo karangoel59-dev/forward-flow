@@ -1,7 +1,9 @@
+mod ai;
 mod commands;
 mod config;
 mod drafts;
 mod entries;
+mod mcp;
 mod notebooks;
 mod state;
 mod vault_git;
@@ -27,6 +29,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::settings::import_settings,
+            commands::settings::export_settings,
             commands::vault::get_vault,
             commands::vault::set_vault,
             commands::vault::get_remote,
@@ -44,7 +48,19 @@ pub fn run() {
             commands::entries::unlink_entries,
             commands::entries::all_tags,
             drafts::save_draft,
-            drafts::load_draft
+            drafts::load_draft,
+            commands::chat::get_ai_connections,
+            commands::chat::set_ai_connection,
+            commands::chat::get_notebook_chat,
+            commands::chat::set_notebook_purpose,
+            commands::chat::clear_notebook_chat,
+            commands::chat::chat_notebook,
+            commands::chat::apply_chat_proposal,
+            commands::mcp::list_mcp_servers,
+            commands::mcp::connect_mcp_server,
+            commands::mcp::remove_mcp_server,
+            commands::mcp::enable_mcp_server,
+            commands::entries::save_chat_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

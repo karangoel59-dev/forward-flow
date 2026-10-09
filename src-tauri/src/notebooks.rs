@@ -96,3 +96,33 @@ pub(crate) fn move_entry_file(
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn read_purpose(dir: &PathBuf) -> Result<String, String> {
+    let path = purpose_path(dir)?;
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let raw = fs::read_to_string(path).map_err(|_| "Cannot read notebook purpose")?;
+    let data: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|_| "Notebook purpose file is invalid")?;
+    Ok(data["purpose"].as_str().unwrap_or_default().into())
+}
+
+fn purpose_path(dir: &PathBuf) -> Result<PathBuf, String> {
+    let path = dir.join(".notebook.json");
+    if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("Notebook purpose must be a regular file".into());
+    }
+    Ok(path)
+}
+
+pub(crate) fn write_purpose(dir: &PathBuf, purpose: &str) -> Result<(), String> {
+    if purpose.len() > 12_000 {
+        return Err("Notebook purpose is too long".into());
+    }
+    fs::write(
+        purpose_path(dir)?,
+        serde_json::to_vec_pretty(&serde_json::json!({"purpose":purpose})).unwrap(),
+    )
+    .map_err(|_| "Cannot save notebook purpose".into())
+}

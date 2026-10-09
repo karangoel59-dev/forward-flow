@@ -115,6 +115,11 @@ pub fn get_remote(dir: &std::path::Path) -> Option<String> {
     backend::get_remote(dir)
 }
 
+pub(crate) fn configure_remote(dir: &std::path::Path, url: &str) -> Result<(), String> {
+    backend::ensure_repo(dir)?;
+    backend::set_remote(dir, url)
+}
+
 /// Sets the remote and queues a push, reporting failures through sync-status.
 pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> Result<(), String> {
     backend::set_remote(&dir, &url)?;

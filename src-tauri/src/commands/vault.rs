@@ -1,5 +1,5 @@
 use crate::{
-    config::{read_config, vault_dir, write_config, Config},
+    config::{read_config, update, vault_dir},
     vault_git,
 };
 use std::{fs, path::PathBuf};
@@ -18,13 +18,14 @@ pub(crate) fn get_vault(app: AppHandle) -> Option<String> {
         let dir = app.path().app_data_dir().ok()?.join("vault");
         fs::create_dir_all(&dir).ok()?;
         let path = dir.to_string_lossy().to_string();
-        write_config(
-            &app,
-            &Config {
-                vault: Some(path.clone()),
-            },
-        )
+        update(&app, |cfg| {
+            cfg.vault = Some(path.clone());
+            Ok(())
+        })
         .ok()?;
+        if let Some(remote) = read_config(&app).git.remote {
+            vault_git::configure_remote(&dir, &remote).ok()?;
+        }
         vault_git::record(&app, dir, "Start Forward Flow vault".into(), true);
         return Some(path);
     }
@@ -36,12 +37,14 @@ pub(crate) fn get_vault(app: AppHandle) -> Option<String> {
 #[tauri::command]
 pub(crate) fn set_vault(app: AppHandle, path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    write_config(
-        &app,
-        &Config {
-            vault: Some(path.clone()),
-        },
-    )?;
+    let cfg = crate::config::settings(&app)?;
+    if let Some(remote) = cfg.git.remote {
+        vault_git::configure_remote(&PathBuf::from(&path), &remote)?;
+    }
+    update(&app, |cfg| {
+        cfg.vault = Some(path.clone());
+        Ok(())
+    })?;
     vault_git::record(
         &app,
         PathBuf::from(path),
@@ -58,7 +61,11 @@ pub(crate) fn get_remote(app: AppHandle) -> Option<String> {
 
 #[tauri::command]
 pub(crate) fn set_remote(app: AppHandle, url: String) -> Result<(), String> {
-    vault_git::set_remote(&app, vault_dir(&app)?, url)
+    vault_git::set_remote(&app, vault_dir(&app)?, url.clone())?;
+    update(&app, |cfg| {
+        cfg.git.remote = Some(url);
+        Ok(())
+    })
 }
 
 #[tauri::command]

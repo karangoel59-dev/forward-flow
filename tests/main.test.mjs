@@ -47,6 +47,8 @@ function frontend(invoke) {
     getCurrentWindow: () => ({}),
     listen: () => Promise.resolve(),
     invoke,
+    setupSettings: () => {},
+    setupChat: () => ({open: async () => true}),
     renderMarkdown: body => body,
     externalMarkdownUrl: () => null,
     openUrl: async () => {},

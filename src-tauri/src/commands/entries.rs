@@ -71,21 +71,46 @@ pub(crate) fn commit_entry(
         return Err("nothing written yet".into());
     }
 
+    let meta = write_page(&dir, &entry_dir, body, notebook)?;
+    let _ = fs::remove_file(draft_path(&app)?);
+    vault_git::record(&app, dir, format!("Add entry {}", meta.name), true);
+    Ok(meta)
+}
+
+fn write_page(
+    dir: &PathBuf,
+    entry_dir: &PathBuf,
+    body: &str,
+    notebook: String,
+) -> Result<EntryMeta, String> {
     let now = chrono::Local::now();
     let stamp = now.format("%Y-%m-%d-%H%M%S").to_string();
-    let path = next_entry_path(&dir, &entry_dir, &stamp);
-
+    let path = next_entry_path(dir, entry_dir, &stamp);
     let raw = format!(
         "---\ncreated: {}\ntags: []\nlinks: []\n---\n\n{}\n",
         now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
         body
     );
     fs::write(&path, &raw).map_err(|e| e.to_string())?;
-    let _ = fs::remove_file(draft_path(&app)?);
-    // The entry is on disk; backing it up happens in the background and cannot fail the save.
-    vault_git::record(&app, dir, format!("Add entry {}", stem_of(&path)), true);
     let mut meta = meta_from(&path, &raw);
     meta.notebook = notebook;
+    Ok(meta)
+}
+
+#[tauri::command]
+pub(crate) fn save_chat_page(
+    app: AppHandle,
+    notebook: String,
+    content: String,
+) -> Result<EntryMeta, String> {
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    let root = vault_dir(&app)?;
+    let dir = notebook_dir(&root, &notebook)?;
+    if content.trim().is_empty() {
+        return Err("Write a page before saving".into());
+    }
+    let meta = write_page(&root, &dir, content.trim(), notebook)?;
+    vault_git::record(&app, root, format!("Add chat page {}", meta.name), true);
     Ok(meta)
 }
 
@@ -181,4 +206,24 @@ pub(crate) fn all_tags(app: AppHandle) -> Result<Vec<TagCount>, String> {
     // Commonest first, then alphabetical.
     out.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn chat_pages_are_new_files_and_preserve_existing_entries() {
+        let root = std::env::temp_dir().join(format!("ff-chat-pages-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Ideas")).unwrap();
+        let body = "# Draft\n\nA new idea.";
+        let first = write_page(&root, &root.join("Ideas"), body, "Ideas".into()).unwrap();
+        let second =
+            write_page(&root, &root.join("Ideas"), "Another page", "Ideas".into()).unwrap();
+        assert_ne!(first.path, second.path);
+        assert_eq!(first.notebook, "Ideas");
+        let (_, saved) = split_frontmatter(&fs::read_to_string(&first.path).unwrap());
+        assert_eq!(saved, format!("{body}\n"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

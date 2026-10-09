@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "git": {
+    "remote": "https://github.com/owner/notebook.git"
+  },
+  "models": {
+    "openai": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "api_key": ""
+    },
+    "claude": {
+      "provider": "claude",
+      "model": "claude-sonnet-4-6",
+      "api_key": ""
+    },
+    "gemini": {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "api_key": ""
+    }
+  },
+  "mcp_servers": {
+    "research": {
+      "id": "research",
+      "url": "https://example.com/mcp",
+      "token": "",
+      "enabled": true
+    }
+  }
+}

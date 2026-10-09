@@ -110,3 +110,14 @@ fn notebook_discovery_does_not_follow_symlinks() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(outside).unwrap();
 }
+
+#[test]
+fn notebook_purpose_round_trips_without_becoming_a_page() {
+    let root = notebook_vault("purpose");
+    assert_eq!(read_purpose(&root).unwrap(), "");
+    write_purpose(&root, "Help me think about travel").unwrap();
+    assert_eq!(read_purpose(&root).unwrap(), "Help me think about travel");
+    assert!(collect_entries(&root).is_empty());
+    assert!(write_purpose(&root, &"x".repeat(12_001)).is_err());
+    fs::remove_dir_all(root).unwrap();
+}

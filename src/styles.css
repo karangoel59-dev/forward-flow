@@ -96,7 +96,7 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
 .tag-row { margin-bottom: 2rem; }
 .tag-row:empty { display: none; }
 .tag-input { margin-bottom: 1.5rem; }
-#reader-body { font-size: 1.4rem; line-height: 1.85; overflow-wrap: anywhere; padding: 0.5rem 0 2.5rem; }
+:where(#reader-body, .markdown-body) { font-size: 1.4rem; line-height: 1.85; overflow-wrap: anywhere; padding: 0.5rem 0 2.5rem; }
 .related { border-top: 1px solid var(--line); padding: 1.5rem 0; }
 .section-label { color: var(--dim); font: 0.7rem/1.5 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.75rem; }
 .related ul { list-style: none; }
@@ -121,7 +121,7 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
   .view-title h1 { font-size: 2.2rem; }
   .row-top { flex-wrap: wrap; gap: 0.25rem; }
   #picker-list li { padding: 1rem 0.75rem; }
-  #reader-body { font-size: 1.2rem; }
+  :where(#reader-body, .markdown-body) { font-size: 1.2rem; }
   .keys-only { display: none; }
   .setup-inner h1 { font-size: 2.5rem; }
 }
@@ -139,23 +139,55 @@ kbd { font: 0.65rem/1 var(--sans); color: var(--dim); border: 1px solid var(--li
 #notebook-error:empty { display: none; }
 #notebook-create { background: var(--accent); color: var(--surface); }
 
-#reader-body > :first-child { margin-top: 0; }
-#reader-body > :last-child { margin-bottom: 0; }
-#reader-body p, #reader-body ul, #reader-body ol, #reader-body pre, #reader-body blockquote, #reader-body table { margin: 0 0 1.2em; }
-#reader-body h1, #reader-body h2, #reader-body h3, #reader-body h4, #reader-body h5, #reader-body h6 { margin: 1.5em 0 0.6em; line-height: 1.3; font-weight: 500; }
-#reader-body h1 { font-size: 1.8em; }
-#reader-body h2 { font-size: 1.5em; }
-#reader-body h3 { font-size: 1.2em; }
-#reader-body h4, #reader-body h5, #reader-body h6 { font-size: 1em; }
-#reader-body ul, #reader-body ol { padding-left: 1.5em; }
-#reader-body li > ul, #reader-body li > ol { margin-bottom: 0; }
-#reader-body blockquote { border-left: 3px solid var(--accent); padding-left: 1em; color: var(--dim); }
-#reader-body a { color: var(--accent); text-underline-offset: 0.2em; }
-#reader-body code { font: 0.8em/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); border-radius: 3px; padding: 0.15em 0.3em; }
-#reader-body pre { overflow-x: auto; padding: 1em; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); white-space: pre; }
-#reader-body pre code { background: transparent; padding: 0; }
-#reader-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 0.85em; }
-#reader-body th, #reader-body td { padding: 0.5em 0.8em; border: 1px solid var(--line); text-align: left; }
-#reader-body th { background: var(--surface); }
-#reader-body hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
-#reader-body img { max-width: 100%; height: auto; }
+:where(#reader-body, .markdown-body) > :first-child { margin-top: 0; }
+:where(#reader-body, .markdown-body) > :last-child { margin-bottom: 0; }
+:where(#reader-body, .markdown-body) p, :where(#reader-body, .markdown-body) ul, :where(#reader-body, .markdown-body) ol, :where(#reader-body, .markdown-body) pre, :where(#reader-body, .markdown-body) blockquote, :where(#reader-body, .markdown-body) table { margin: 0 0 1.2em; }
+:where(#reader-body, .markdown-body) h1, :where(#reader-body, .markdown-body) h2, :where(#reader-body, .markdown-body) h3, :where(#reader-body, .markdown-body) h4, :where(#reader-body, .markdown-body) h5, :where(#reader-body, .markdown-body) h6 { margin: 1.5em 0 0.6em; line-height: 1.3; font-weight: 500; }
+:where(#reader-body, .markdown-body) h1 { font-size: 1.8em; }
+:where(#reader-body, .markdown-body) h2 { font-size: 1.5em; }
+:where(#reader-body, .markdown-body) h3 { font-size: 1.2em; }
+:where(#reader-body, .markdown-body) h4, :where(#reader-body, .markdown-body) h5, :where(#reader-body, .markdown-body) h6 { font-size: 1em; }
+:where(#reader-body, .markdown-body) ul, :where(#reader-body, .markdown-body) ol { padding-left: 1.5em; }
+:where(#reader-body, .markdown-body) li > ul, :where(#reader-body, .markdown-body) li > ol { margin-bottom: 0; }
+:where(#reader-body, .markdown-body) blockquote { border-left: 3px solid var(--accent); padding-left: 1em; color: var(--dim); }
+:where(#reader-body, .markdown-body) a { color: var(--accent); text-underline-offset: 0.2em; }
+:where(#reader-body, .markdown-body) code { font: 0.8em/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface); border-radius: 3px; padding: 0.15em 0.3em; }
+:where(#reader-body, .markdown-body) pre { overflow-x: auto; padding: 1em; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); white-space: pre; }
+:where(#reader-body, .markdown-body) pre code { background: transparent; padding: 0; }
+:where(#reader-body, .markdown-body) table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 0.85em; }
+:where(#reader-body, .markdown-body) th, :where(#reader-body, .markdown-body) td { padding: 0.5em 0.8em; border: 1px solid var(--line); text-align: left; }
+:where(#reader-body, .markdown-body) th { background: var(--surface); }
+:where(#reader-body, .markdown-body) hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
+:where(#reader-body, .markdown-body) img { max-width: 100%; height: auto; }
+
+.chat-inner { width: 100%; max-width: 48rem; display: flex; flex-direction: column; min-height: 0; }
+.chat-inner .view-title { margin-bottom: 1rem; }
+.chat-inner h1 { overflow-wrap: anywhere; }
+.chat-details { border-bottom: 1px solid var(--line); padding: 0.6rem 0; font: 0.8rem/1.6 var(--sans); }
+.chat-details summary { cursor: pointer; min-height: 36px; color: var(--accent); }
+.chat-inner textarea, .chat-inner input, .chat-inner select { color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 0.7rem; font: 0.9rem/1.5 var(--sans); }
+.chat-inner textarea { width: 100%; resize: vertical; min-height: 3rem; }
+.ai-form { display: grid; gap: 0.5rem; padding-bottom: 1rem; }
+.chat-inner > .notebook-controls { margin-top: 0.6rem; }
+#chat-log { flex: 1; min-height: 8rem; overflow-y: auto; margin: 0.8rem 0; padding-right: 0.5rem; }
+.chat-message { padding: 1rem 0; border-bottom: 1px solid var(--line); }
+.chat-message.user { padding: 1rem; background: var(--surface); border-radius: 5px; }
+.chat-message .eyebrow { margin-bottom: 0.7rem; }
+.chat-message .markdown-body { font-size: 1rem; line-height: 1.6; padding-bottom: 0; }
+#chat-form { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+#chat-form button { float: right; margin-top: 0.4rem; background: var(--accent); color: var(--surface); }
+#chat-page-panel { position: fixed; inset: 0; z-index: 20; background: var(--paper); overflow-y: auto; padding: 3rem max(1.25rem, calc((100vw - 42rem) / 2)); }
+#chat-page-panel h2 { font-weight: 400; margin-bottom: 1rem; }
+#chat-page { margin: 0.75rem 0; min-height: 50vh; font-family: var(--serif); }
+#chat-page-save { background: var(--accent); color: var(--surface); }
+@media (max-height: 700px) { .chat-inner { min-height: 100%; } #chat-log { flex: none; max-height: 45vh; } }
+
+.tool-proposal { border: 1px solid var(--line); border-radius: 5px; padding: 1rem; margin-top: 1rem; background: var(--surface); }
+.tool-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow-y: auto; font: 0.8rem/1.5 ui-monospace, monospace; margin: 0.75rem 0; }
+.tool-proposal details { margin-bottom: 1rem; font: 0.8rem/1.5 var(--sans); }
+
+.mcp-server { padding: 0.75rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.mcp-server details p { padding: 0.4rem 0; }
+
+.config-review { z-index: 100; background: var(--paper, #f6f1e7); }
+.config-settings { width: 100%; }
