@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "git": {
+    "remote": "https://github.com/owner/notebook.git"
+  },
+  "models": {
+    "openai": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "api_key": "",
+      "models": [
+        "gpt-4.1-mini"
+      ]
+    },
+    "claude": {
+      "provider": "claude",
+      "model": "claude-sonnet-4-6",
+      "api_key": "",
+      "models": [
+        "claude-sonnet-4-6"
+      ]
+    },
+    "gemini": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash",
+      "api_key": "",
+      "models": [
+        "gemini-3.8-flash"
+      ]
+    }
+  },
+  "mcp_servers": {
+    "research": {
+      "id": "research",
+      "url": "https://example.com/mcp",
+      "token": "",
+      "enabled": true
+    }
+  }
+}

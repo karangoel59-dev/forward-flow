@@ -46,6 +46,97 @@ Inside an open entry:
 In the viewer's filter box, a query starting with `#` matches tags only;
 anything else matches date, prose and tags together.
 
+## Markdown
+
+Write Markdown directly in the editor. Saved entries render headings, emphasis,
+lists, blockquotes, links, images, tables, and fenced code blocks in the reader.
+Links with full HTTP, HTTPS, or mailto URLs open in your default browser or mail
+app. HTML is sanitized before display. The editor remains plain text and files
+keep their Markdown source; rendering never rewrites your prose.
+
+## Chat with a notebook
+
+Choose a notebook (or Inbox) and use **Chat**. Set its **Notebook purpose** to
+shape the assistant’s goals and style. Connect Gemini, Claude, or OpenAI under
+**AI connections** using your API key and an available model ID. Named connections keep their own endpoint, API key, current model, and saved
+model list. You can switch connections and models between turns.
+
+When you send a message, the app sends the notebook purpose, conversation, and
+pages directly in that notebook to the chosen provider. It includes up to 60 KB
+of page text, newest first, skipping pages that do not fit. The response shows
+how many pages were included. Child notebooks have separate context.
+
+Replies render as Markdown. **Save as page** opens an editable review; **Save
+page** then creates a new immutable Markdown entry in the same notebook. Your
+writing draft is preserved. Chat history persists on this device; **New
+conversation** starts another chat and keeps earlier conversations for `/resume`.
+
+Purposes live in `.notebook.json` and sync with the vault. API keys and chat
+histories live in app settings outside the vault, never in Git. Keys are stored
+as local JSON with owner-only file permissions on Unix; they are not encrypted
+in a system keychain. Provider API usage requires your own account and quota.
+Replies arrive once generation finishes; this version does not stream tokens.
+
+Chat shares the main writing screen with the editor: beside it on desktop and
+below it on smaller screens. Selecting a notebook changes chat context while
+preserving your writing draft. **Hide chat** expands the writing space; **Chat ↗**
+reopens it. Purpose, AI connections, and MCP servers are under **Purpose & connections**.
+
+### Notebook tools
+
+All three providers can call tools during chat. Read, search, list, Git status,
+and vault commit-history tools run immediately. Creating pages or child
+notebooks, moving pages into child notebooks, tags, links, revisions, deletions,
+and sync produce **proposals**. Review the arguments and original contents, then
+choose **Apply change**. Unapplied proposals do not change files. Changes are
+recorded and synced by the existing Git backend.
+
+Page tools are restricted to the selected notebook. A revision creates a new
+page, copies its tags, and links it to the preserved original. If a page changes
+before a proposal is applied, the proposal is rejected. Each turn permits at
+most six provider rounds with eight tool calls per round. Git history shows
+vault commit summaries; the model cannot run shell commands or arbitrary Git
+operations. Markdown tables work; chart rendering is not included yet.
+
+### External MCP servers
+
+Open **External MCP tools** in notebook chat. Enter a server name, its
+Streamable HTTP endpoint (for example `https://example.com/mcp`), and an optional
+bearer token, then choose **Connect & discover tools**. View discovered tools,
+refresh the connection, disable its tools, or disconnect it from the same panel.
+Enabled servers are available to notebook chat on this device.
+
+The app supports Streamable HTTP with JSON or SSE responses and protocol
+versions `2025-11-25`, `2025-06-18`, and `2025-03-26`. HTTPS is required except
+for localhost endpoints. Legacy HTTP+SSE, stdio subprocesses, OAuth sign-in,
+sampling, elicitation, resources, and prompts are not supported by this client.
+
+Models can propose discovered tools from any enabled server. Every external
+call requires **Approve & run external tool**, showing the server, endpoint,
+tool, and arguments. The call’s text and structured result is stored in chat
+history and included in subsequent messages to the selected LLM. Calls are not
+automatically retried; an interrupted request might already have executed on
+the server. An attempted call cannot be applied again from the same proposal.
+Tool schemas are rechecked before invocation. Up to 64 external tools are
+exposed to the model, with bounded response and argument sizes.
+
+Server settings and bearer tokens live in `config.json` in app settings,
+with owner-only permissions on Unix. Tokens stay outside Git and are not sent
+as tool definitions or LLM credentials. Tokens are stored locally without
+keychain encryption. On Android, localhost refers to the phone itself.
+
+## Notebooks
+
+Create a notebook with **+ New notebook** on the writing page or in the archive.
+Choose a notebook before committing to save your next entry there. Existing
+entries stay in **Inbox**, the vault root. The archive lets you browse **All pages**,
+Inbox, or one notebook; open an entry and use **Move entry** to change its notebook.
+Moving preserves the entry's prose, timestamp, tags, and links across notebooks.
+
+Notebooks are ordinary subfolders of your vault, synced with the entries inside
+them. Empty notebooks contain a `.gitkeep` file so they also sync. Existing nested
+folders are listed as notebooks too. No migration is needed for existing vaults.
+
 ## Syncing
 
 Every commit is pushed to a git remote in the background if one is set —
@@ -163,3 +254,178 @@ lose anything; the draft is restored on next launch and removed on commit.
 The text sizes itself: it starts large and shrinks as the entry grows, so the
 page stays full without scrolling. Past a floor of 17px it stops shrinking and
 scrolls, keeping the line you're writing in view.
+
+## Backend layout
+
+`src-tauri/src/lib.rs` wires up plugins, startup, and the Tauri command handler.
+The backend is organized by responsibility:
+
+- `commands/`: Tauri commands for vault settings, entries, and notebooks.
+- `config.rs`: persisted vault configuration and paths.
+- `drafts.rs`: draft storage and autosave commands.
+- `entries.rs`: entry discovery, frontmatter, tags, and links.
+- `notebooks.rs`: notebook folders, path validation, and entry moves.
+- `state.rs`: the shared lock for vault writes and Android checkouts.
+- `vault_git.rs` and `vault_git/`: background sync and platform Git backends.
+
+Entry and notebook tests live alongside their modules in `entries/tests.rs` and
+`notebooks/tests.rs`. Run backend checks with
+`cargo test --manifest-path src-tauri/Cargo.toml`.
+
+### Portable setup config
+
+Use **Settings → Portable setup config → Export config** to move model, MCP,
+and Git connections between devices. The welcome screen also has **Import setup
+config**, so connections can be loaded before selecting a vault folder.
+Import shows a summary and requires **Apply config**. It merges the supplied
+connections by ID, keeps connections omitted from the file, and preserves the
+current device's vault folder, drafts, and chat history. You can also import an
+existing device's `config.json`; its vault path is ignored. Blank API keys keep
+existing keys; blank MCP tokens keep a saved token only when the endpoint matches.
+
+Settings now share one private `config.json` in the app config directory. Existing
+AI and MCP settings migrate automatically; legacy files are removed after a
+successful save. Chat history remains separate. The portable file has this format:
+
+```json
+{
+  "version": 1,
+  "git": { "remote": "https://github.com/owner/notebook.git" },
+  "models": {
+    "openai": { "provider": "openai", "model": "gpt-4.1-mini", "api_key": "" },
+    "claude": { "provider": "claude", "model": "claude-sonnet-4-6", "api_key": "" },
+    "gemini": { "provider": "gemini", "model": "gemini-3.8-flash", "api_key": "" }
+  },
+  "mcp_servers": {
+    "research": {
+      "id": "research",
+      "url": "https://example.com/mcp",
+      "token": "",
+      "enabled": true
+    }
+  }
+}
+```
+
+Export omits API keys, bearer tokens, and HTTPS Git credentials by default.
+Select **Include API keys and tokens** for a complete transfer; the resulting
+file contains readable credentials and must be kept private. Files are written
+with owner-only permissions on Unix. No credentials go into the synced vault.
+
+Import validates the entire file before applying it. It configures the Git remote
+locally without starting a push or contacting MCP servers. Normal background
+sync continues for an existing vault; choose **Sync now** to fetch entries.
+Open notebook chat and use each new server's **Edit / refresh → Connect & discover
+tools** before using it. Uploaded tool schemas are ignored; discovery comes from
+the server. Supported MCP transports and authentication remain unchanged.
+
+### Azure OpenAI
+
+Select **Azure OpenAI** in **Purpose & connections → AI connections**. Enter the
+resource endpoint (for example `https://your-resource.openai.azure.com`), your
+Azure deployment name, and the resource API key. You can also use an endpoint
+ending in `/openai/v1/`. The deployment must support the Responses API and tools.
+The app uses `/openai/v1/responses` with API-key authentication; Microsoft Entra
+sign-in and legacy versioned deployment endpoints are not supported.
+
+Azure supports the same notebook tools and external MCP proposals as OpenAI.
+Include it in a portable config under the `azure_openai` key:
+
+```json
+{
+  "provider": "azure_openai",
+  "model": "your-deployment-name",
+  "endpoint": "https://your-resource.openai.azure.com",
+  "api_key": ""
+}
+```
+
+See [Microsoft's Azure Responses API guide](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/responses?view=foundry-classic).
+
+### Editor tools
+
+Chat can use `read_editor` to read the unsaved draft captured when you send a
+message. That draft is shared with your selected provider only when requested by
+the tool. `replace_editor` proposes Markdown edits or formatting, `save_editor`
+saves a page in the selected notebook without clearing the draft, and
+`clear_editor` proposes clearing it. Changes require **Apply change** and are
+rejected if the editor content, notebook, or revision has changed. Replacements
+and clearing persist to the local draft; saved pages use the normal Git backup.
+
+### Chat slash commands
+
+Type `/` in the chat composer for suggestions. Use arrow keys to choose, Enter
+or Tab to complete, and the send icon or ⌘/Ctrl+Enter to run. Commands execute
+locally and are never sent to the LLM or added to conversation history.
+
+| Command | Action |
+| --- | --- |
+| `/provider` or `/provider list` | List providers and select a connected one |
+| `/provider azure_openai` | Switch the chat provider (also `openai`, `claude`, `gemini`) |
+| `/model` or `/model list` | List models for the selected provider |
+| `/model <model>` | Save a different model; Azure expects a deployment name |
+| `/mcp` | Show saved MCP servers, enabled state, and discovered tool counts |
+| `/mcp reconnect <server>` | Reconnect and refresh tools with the saved token |
+| `/mcp reconnect all` | Reconnect all saved servers; disabled servers stay disabled |
+| `/mcp enable <server>` / `/mcp disable <server>` | Enable or disable tools for chat |
+| `/resume` | Choose an earlier conversation in the current notebook |
+| `/resume <ID>` / `/resume latest` | Resume a specific chat or the most recently updated inactive chat |
+| `/new` | Start a new conversation while retaining the previous one |
+| `/help` | Show command help |
+
+OpenAI, Claude, and Gemini model lists are fetched on demand using your saved
+connection. Lists may contain models without text or tool support; choose a
+compatible model. If discovery fails, `/model <model>` still accepts a known
+model ID. Azure lists saved deployments; enter another deployment name from
+your Azure resource with `/model <deployment>`.
+
+Gemini may list older models that are unavailable to new users. A 404 from
+`gemini-2.5-flash` can mean the model is unavailable for your key; switch with
+`/provider gemini` followed by `/model gemini-3.8-flash`. The app sends Gemini
+tool schemas through `parametersJsonSchema`, including notebook, editor, and
+external MCP tools.
+
+Conversation history stays on this device, outside the vault. Existing chat
+files migrate when saved. Resuming keeps the current conversation and editor
+draft and preserves tool approval/attempt status. It uses the currently selected
+provider and model; the list shows the last provider/model used for each chat.
+Chats deleted with the old **New conversation** behavior cannot be recovered.
+
+### Saved models and named connections
+
+A connection has a provider **type** (`openai`, `claude`, `gemini`, or
+`azure_openai`) and a unique **name**. Multiple connections can share a type.
+For example, `azure_openai` and `azure-voice` can have separate Azure resources
+and API keys. Existing provider-named connections continue to work.
+
+Under **AI connections**, choose **New connection**, enter `azure-voice` as the
+connection name, select **Azure OpenAI**, and enter its endpoint, current
+model/deployment, saved model list, and API key. Choose a saved connection in the
+form to edit it. Blank keys retain the existing key only for the same connection,
+provider type, and endpoint.
+
+`/provider azure-voice` selects that connection. `/model saved` shows clickable
+saved models without contacting the provider; `/model add <name>` saves a model
+without switching. `/model <name>` switches and also keeps the model in the saved
+list. Each connection supports up to 64 saved models; editing or importing adds
+to the existing list.
+
+Add named connections as keys inside the portable config's `models` object:
+
+```json
+{
+  "azure-voice": {
+    "provider": "azure_openai",
+    "model": "your-current-deployment",
+    "models": ["your-current-deployment", "another-deployment"],
+    "endpoint": "https://your-voice-resource.openai.azure.com/openai/v1/",
+    "api_key": ""
+  }
+}
+```
+
+The outer key is the connection name; `provider` selects its API format. `model`
+is the active selection and `models` is the saved list. Older configs without
+`models` use the active model as their initial saved model. A connection named
+`azure-voice` uses the same text Responses API and notebook tools; its name does
+not enable audio recording or speech output.

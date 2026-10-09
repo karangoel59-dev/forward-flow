@@ -1,10 +1,10 @@
-name: Android build
+name: Android TLS debug
 
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [fix/android-ca-initialization]
+    paths: [.github/workflows/android-debug.yml]
 
 permissions:
   contents: write
@@ -61,6 +61,18 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
+      - name: Configure isolated debug app
+        run: |
+          python3 - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("src-tauri/tauri.conf.json")
+          config = json.loads(p.read_text())
+          config["identifier"] = "com.karangoel59.forwardflowdebug"
+          config["productName"] = "Forward Flow TLS Debug"
+          config["build"]["devUrl"] = None
+          p.write_text(json.dumps(config))
+          PY
+
       - name: Init Android project
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -97,84 +109,23 @@ jobs:
           find "$res/mipmap-anydpi-v26" "$res"/mipmap-*dpi -name 'ic_launcher*'
           grep -n "ic_launcher_background" "$res/values/colors.xml"
 
-      # Reuse the release signing key so installed apps can receive updates.
-      - name: Set up Android release signing
-        run: |
-          cd src-tauri/gen/android
-          echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}" > keystore.properties
-          echo "password=${{ secrets.ANDROID_KEY_PASSWORD }}" >> keystore.properties
-          base64 -d <<< "${{ secrets.ANDROID_KEY_BASE64 }}" > "$RUNNER_TEMP/release.p12"
-          echo "storeFile=$RUNNER_TEMP/release.p12" >> keystore.properties
-
-      # Regenerated Gradle templates need signingConfigs wired to keystore.properties.
-      - name: Wire release signing into the generated Gradle build
-        run: |
-          python3 - <<'PY'
-          import pathlib
-
-          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
-          text = p.read_text()
-
-          text = text.replace(
-              "import java.util.Properties\n",
-              "import java.util.Properties\nimport java.io.FileInputStream\n",
-              1,
-          )
-
-          signing_block = '''    signingConfigs {
-              create("release") {
-                  val keystorePropertiesFile = rootProject.file("keystore.properties")
-                  val keystoreProperties = Properties()
-                  if (keystorePropertiesFile.exists()) {
-                      keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-                  }
-                  keyAlias = keystoreProperties["keyAlias"] as String
-                  keyPassword = keystoreProperties["password"] as String
-                  storeFile = file(keystoreProperties["storeFile"] as String)
-                  storePassword = keystoreProperties["password"] as String
-              }
-          }
-          '''
-          with_signing_configs = text.replace("android {\n", "android {\n" + signing_block, 1)
-          assert with_signing_configs != text, "anchor 'android {' not found — template changed upstream"
-
-          wired = with_signing_configs.replace(
-              '        getByName("release") {\n',
-              '        getByName("release") {\n            signingConfig = signingConfigs.getByName("release")\n',
-              1,
-          )
-          assert wired != with_signing_configs, 'anchor \'getByName("release") {\' not found — template changed upstream'
-
-          p.write_text(wired)
-          PY
-          echo "--- patched build.gradle.kts (signing lines) ---"
-          grep -n -i "signing\|keyAlias\|FileInputStream" src-tauri/gen/android/app/build.gradle.kts
-
       # Set archive tools explicitly; OpenSSL Configure uses unqualified tool names.
       - name: Build release APK
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          CARGO_PROFILE_DEV_DEBUG: "0"
           RANLIB: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
           AR: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
-        run: npx tauri android build --apk
+        run: npx tauri android build --debug --apk --target aarch64 --features tls-diagnostics
 
       - name: Locate APK
         id: apk
         run: |
-          apk=src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
-          test -s "$apk"
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$apk"
-          "$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk"
+          apk=$(find src-tauri/gen/android -name "*.apk" | head -n 1)
           echo "path=$apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: forward-flow-android-release
+          name: forward-flow-android-tls-debug
           path: ${{ steps.apk.outputs.path }}
 
-      - name: Attach APK to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          files: ${{ steps.apk.outputs.path }}

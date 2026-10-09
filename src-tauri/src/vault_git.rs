@@ -102,7 +102,7 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, ann
             emit(&app, "error", e);
             return;
         }
-        let active = crate::collect_active_tags(&dir);
+        let active = crate::entries::collect_active_tags(&dir);
         if let Err(e) = backend::sync_tag_branches(&dir, &active) {
             emit(&app, "error", format!("Branch sync failed: {}", e));
         }
@@ -113,6 +113,11 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, message: String, ann
 /// Returns the remote URL, including credentials; mask it before displaying.
 pub fn get_remote(dir: &std::path::Path) -> Option<String> {
     backend::get_remote(dir)
+}
+
+pub(crate) fn configure_remote(dir: &std::path::Path, url: &str) -> Result<(), String> {
+    backend::ensure_repo(dir)?;
+    backend::set_remote(dir, url)
 }
 
 /// Sets the remote and queues a push, reporting failures through sync-status.
@@ -155,7 +160,7 @@ pub fn sync_now<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, announce: bool) {
 pub fn start_background_sync(app: AppHandle) {
     thread::spawn(move || loop {
         thread::sleep(std::time::Duration::from_secs(60));
-        if let Ok(dir) = crate::vault_dir(&app) {
+        if let Ok(dir) = crate::config::vault_dir(&app) {
             if backend::get_remote(&dir).is_some() {
                 let _ = sync_vault(&app, &dir, false);
             }
@@ -291,4 +296,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&remote).unwrap();
     }
+}
+
+#[cfg(all(target_os = "android", feature = "tls-diagnostics"))]
+pub fn diagnose_tls(dir: PathBuf) {
+    thread::spawn(move || libgit2_backend::diagnose_tls(&dir));
 }
