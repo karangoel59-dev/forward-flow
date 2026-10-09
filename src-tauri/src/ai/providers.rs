@@ -2,8 +2,8 @@ use super::{Connection, Message};
 use serde_json::{json, Value};
 
 pub(crate) fn validate(provider: &str, model: &str) -> Result<(), String> {
-    if !["openai", "claude", "gemini"].contains(&provider) {
-        return Err("Choose OpenAI, Claude, or Gemini".into());
+    if !["openai", "azure_openai", "claude", "gemini"].contains(&provider) {
+        return Err("Choose OpenAI, Azure OpenAI, Claude, or Gemini".into());
     }
     if model.is_empty()
         || model.len() > 100
@@ -16,16 +16,66 @@ pub(crate) fn validate(provider: &str, model: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn validate_connection(c: &Connection) -> Result<(), String> {
+    validate(&c.provider, &c.model)?;
+    if c.provider == "azure_openai" {
+        azure_url(&c.endpoint)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn http_error(c: &Connection, code: u16) -> String {
+    match code {
+        401 | 403 => "Provider rejected the API key or model access.".into(),
+        429 => "Provider rate limit or quota reached. Try again later.".into(),
+        500 | 502 | 503 | 504 => {
+            format!("Provider is temporarily unavailable (HTTP {code}). Try again shortly.")
+        }
+        404 if c.provider == "gemini" => format!(
+            "Gemini model {} is unavailable for this key or API (HTTP 404). Use /model available to find models, then /model <model> to switch. Listed models may still be unavailable to your account.",
+            c.model
+        ),
+        _ => format!("Provider request failed (HTTP {code}). Check the model name and account."),
+    }
+}
+fn azure_url(endpoint: &str) -> Result<String, String> {
+    let url =
+        reqwest::Url::parse(endpoint).map_err(|_| "Enter your Azure HTTPS resource endpoint")?;
+    let host = url.host_str().unwrap_or_default();
+    if url.scheme() != "https"
+        || ![
+            ".openai.azure.com",
+            ".services.ai.azure.com",
+            ".cognitiveservices.azure.com",
+        ]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.port().is_some()
+        || !["", "/", "/openai/v1", "/openai/v1/"].contains(&url.path())
+    {
+        return Err("Use your Azure resource HTTPS endpoint, optionally ending in /openai/v1/. Credentials belong in the API key field.".into());
+    }
+    Ok(format!("https://{host}/openai/v1/responses"))
+}
+
 pub(crate) fn request(
     c: &Connection,
     system: &str,
     messages: &[Message],
 ) -> Result<(String, Value), String> {
-    validate(&c.provider, &c.model)?;
+    validate_connection(c)?;
     let plain: Vec<_> = messages.iter().map(|m|json!({"role":m.role,"content":format!("{}{}",m.content, if m.proposals.is_empty(){String::new()}else{format!("\nTool proposals and current status: {}",serde_json::to_string(&m.proposals.iter().map(|p|json!({"id":p.id,"tool":p.name,"applied":p.applied,"result":p.arguments.get("result")})).collect::<Vec<_>>()).unwrap())})})).collect();
     Ok(match c.provider.as_str() {
-        "openai" => (
-            "https://api.openai.com/v1/responses".into(),
+        "openai" | "azure_openai" => (
+            if c.provider == "azure_openai" {
+                azure_url(&c.endpoint)?
+            } else {
+                "https://api.openai.com/v1/responses".into()
+            },
             json!({"model":c.model,"instructions":system,"input":plain,"max_output_tokens":4096,"store":false}),
         ),
         "claude" => (
@@ -49,7 +99,7 @@ pub(crate) fn text(provider: &str, data: &Value) -> Result<String, String> {
         );
     }
     let blocks: Vec<&Value> = match provider {
-        "openai" => data["output"]
+        "openai" | "azure_openai" => data["output"]
             .as_array()
             .into_iter()
             .flatten()
@@ -100,7 +150,9 @@ mod tests {
             let c = Connection {
                 provider: provider.into(),
                 model: "test-model".into(),
+                models: vec![],
                 api_key: "secret".into(),
+                endpoint: String::new(),
             };
             let messages = vec![
                 Message {
@@ -121,7 +173,7 @@ mod tests {
                 assert_eq!(body["contents"][1]["role"], "model");
                 assert_eq!(body["systemInstruction"]["parts"][0]["text"], "purpose");
             }
-            if provider == "openai" {
+            if matches!(provider, "openai" | "azure_openai") {
                 assert_eq!(body["store"], false);
                 assert_eq!(body["instructions"], "purpose");
             }
@@ -146,9 +198,69 @@ mod tests {
         assert!(text("gemini", &json!({"candidates":[]})).is_err());
     }
     #[test]
+    fn azure_responses_support_tools_and_validate_resource_endpoint() {
+        let c = Connection {
+            provider: "azure_openai".into(),
+            model: "my-deployment".into(),
+            models: vec![],
+            api_key: "secret".into(),
+            endpoint: "https://my-resource.openai.azure.com/openai/v1/".into(),
+        };
+        let (url, mut body) = request(&c, "purpose", &[]).unwrap();
+        assert_eq!(
+            url,
+            "https://my-resource.openai.azure.com/openai/v1/responses"
+        );
+        assert_eq!(body["model"], "my-deployment");
+        attach_tools("azure_openai", &mut body, &crate::ai::tools::definitions());
+        assert_eq!(body["tools"][0]["type"], "function");
+        let data = json!({"output":[{"type":"function_call","call_id":"call1","name":"read_entry","arguments":"{}"},{"type":"message","content":[{"type":"output_text","text":"Done"}]}]});
+        let calls = calls("azure_openai", &data).unwrap();
+        assert_eq!(calls[0].id, "call1");
+        append_results(
+            "azure_openai",
+            &mut body,
+            &data,
+            &[(calls[0].clone(), json!({"ok":true}))],
+        )
+        .unwrap();
+        assert_eq!(
+            body["input"].as_array().unwrap().last().unwrap()["type"],
+            "function_call_output"
+        );
+        assert_eq!(text("azure_openai", &data).unwrap(), "Done");
+        assert!(!body.to_string().contains("secret"));
+        for endpoint in [
+            "http://r.openai.azure.com",
+            "https://evil.example",
+            "https://user:secret@r.openai.azure.com",
+            "https://r.openai.azure.com/?key=secret",
+            "https://r.openai.azure.com/other",
+        ] {
+            assert!(azure_url(endpoint).is_err());
+        }
+    }
+    #[test]
     fn rejects_unknown_providers_and_model_path_injection() {
         assert!(validate("other", "model").is_err());
         assert!(validate("gemini", "model?key=secret").is_err());
+    }
+    #[test]
+    fn gemini_missing_models_explain_how_to_switch_without_exposing_credentials() {
+        let connection = Connection {
+            provider: "gemini".into(),
+            model: "unavailable-model".into(),
+            api_key: "private-key".into(),
+            ..Default::default()
+        };
+        let error = http_error(&connection, 404);
+        assert!(error.contains("unavailable-model"));
+        assert!(error.contains("/model available"));
+        assert!(error.contains("/model <model>"));
+        assert!(!error.contains(&connection.api_key));
+        assert!(http_error(&connection, 429).contains("quota"));
+        assert!(http_error(&connection, 403).contains("API key"));
+        assert!(http_error(&connection, 503).contains("temporarily unavailable"));
     }
 }
 
@@ -161,7 +273,7 @@ pub(crate) struct ToolCall {
 
 pub(crate) fn calls(provider: &str, data: &Value) -> Result<Vec<ToolCall>, String> {
     let items: Vec<&Value> = match provider {
-        "openai" => data["output"]
+        "openai" | "azure_openai" => data["output"]
             .as_array()
             .into_iter()
             .flatten()
@@ -189,7 +301,7 @@ pub(crate) fn calls(provider: &str, data: &Value) -> Result<Vec<ToolCall>, Strin
                 .ok_or("Tool call is missing its name")?
                 .to_owned();
             let arguments = match provider {
-                "openai" => {
+                "openai" | "azure_openai" => {
                     serde_json::from_str(v["arguments"].as_str().ok_or("Invalid tool arguments")?)
                         .map_err(|_| "Invalid tool argument JSON")?
                 }
@@ -199,7 +311,7 @@ pub(crate) fn calls(provider: &str, data: &Value) -> Result<Vec<ToolCall>, Strin
             if !arguments.is_object() {
                 return Err("Tool arguments must be an object".into());
             }
-            let id = if provider == "openai" {
+            let id = if matches!(provider, "openai" | "azure_openai") {
                 v["call_id"].as_str()
             } else {
                 v["id"].as_str()
@@ -215,11 +327,11 @@ pub(crate) fn calls(provider: &str, data: &Value) -> Result<Vec<ToolCall>, Strin
 
 pub(crate) fn attach_tools(provider: &str, body: &mut Value, definitions: &[Value]) {
     body["tools"] = match provider {
-        "openai" => json!(definitions.iter().map(|d| json!({"type":"function","name":d["name"],"description":d["description"],"parameters":d["parameters"],"strict":false})).collect::<Vec<_>>()),
+        "openai" | "azure_openai" => json!(definitions.iter().map(|d| json!({"type":"function","name":d["name"],"description":d["description"],"parameters":d["parameters"],"strict":false})).collect::<Vec<_>>()),
         "claude" => json!(definitions.iter().map(|d| json!({"name":d["name"],"description":d["description"],"input_schema":d["parameters"]})).collect::<Vec<_>>()),
-        _ => json!([{"functionDeclarations":definitions}]),
+        _ => json!([{"functionDeclarations":definitions.iter().map(|d| json!({"name":d["name"],"description":d["description"],"parametersJsonSchema":d["parameters"]})).collect::<Vec<_>>()}]),
     };
-    if provider == "openai" {
+    if matches!(provider, "openai" | "azure_openai") {
         body["parallel_tool_calls"] = json!(false);
     }
 }
@@ -231,7 +343,7 @@ pub(crate) fn append_results(
     results: &[(ToolCall, Value)],
 ) -> Result<(), String> {
     let key = match provider {
-        "openai" => "input",
+        "openai" | "azure_openai" => "input",
         "claude" => "messages",
         _ => "contents",
     };
@@ -239,7 +351,7 @@ pub(crate) fn append_results(
         .as_array_mut()
         .ok_or("Invalid provider conversation")?;
     match provider {
-        "openai" => {
+        "openai" | "azure_openai" => {
             conversation.extend(
                 data["output"]
                     .as_array()
@@ -273,6 +385,32 @@ pub(crate) fn append_results(
 mod tool_tests {
     use super::*;
     #[test]
+    fn gemini_accepts_json_schemas_for_notebook_editor_and_external_tools() {
+        let mut definitions = crate::ai::tools::definitions();
+        definitions.extend(crate::ai::editor::definitions());
+        definitions.push(json!({
+            "name": "mcp_nested",
+            "description": "External tool with a full JSON schema",
+            "parameters": {
+                "type": "object",
+                "properties": {"options": {"type": "object", "additionalProperties": {"type": "string"}}},
+                "additionalProperties": false
+            }
+        }));
+        let mut body = json!({});
+        attach_tools("gemini", &mut body, &definitions);
+        let declarations = body["tools"][0]["functionDeclarations"].as_array().unwrap();
+        assert_eq!(declarations.len(), definitions.len());
+        for (declaration, definition) in declarations.iter().zip(&definitions) {
+            assert!(declaration.get("parameters").is_none());
+            assert_eq!(
+                declaration["parametersJsonSchema"],
+                definition["parameters"]
+            );
+            assert_eq!(declaration["name"], definition["name"]);
+        }
+    }
+    #[test]
     fn each_provider_pairs_tool_calls_and_results() {
         let responses = [
             (
@@ -292,7 +430,9 @@ mod tool_tests {
             let c = Connection {
                 provider: provider.into(),
                 model: "model".into(),
+                models: vec![],
                 api_key: "secret".into(),
+                endpoint: String::new(),
             };
             let (_, mut body) = request(
                 &c,

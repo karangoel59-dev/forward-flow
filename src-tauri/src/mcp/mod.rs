@@ -80,6 +80,28 @@ pub(crate) async fn connect(app: &AppHandle, mut server: Server) -> Result<Serve
         tools: server.tools,
     })
 }
+pub(crate) async fn reconnect(app: &AppHandle, id: &str) -> Result<ServerStatus, String> {
+    let server = servers(app)?.remove(id).ok_or("MCP server not found")?;
+    let mut session = transport::Session::connect(&server).await?;
+    let tools = session.tools().await;
+    session.close().await;
+    let tools = tools?;
+    crate::config::update(app, |cfg| {
+        let current = cfg
+            .mcp_servers
+            .get_mut(id)
+            .ok_or("MCP server was removed during reconnect")?;
+        if current.url != server.url || current.token != server.token {
+            return Err("MCP server changed during reconnect. Try again.".into());
+        }
+        current.tools = tools;
+        Ok(())
+    })?;
+    statuses(app)?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or("MCP server was removed".into())
+}
 pub(crate) fn remove(app: &AppHandle, id: &str) -> Result<(), String> {
     let _lock = SETTINGS.lock().unwrap_or_else(|e| e.into_inner());
     crate::config::update(app, |cfg| {

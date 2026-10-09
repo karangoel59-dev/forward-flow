@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function frontend(invoke) {
+function frontend(invoke, chatOpen = async () => true) {
   const elements = new Map();
   const timers = new Map();
   let nextTimer = 0;
@@ -19,6 +19,7 @@ function frontend(invoke) {
     querySelector() { return this; }
     classList = { add() {}, remove() {} };
     addEventListener() {}
+    setAttribute() {}
     focus() {}
     blur() {}
   }
@@ -48,7 +49,7 @@ function frontend(invoke) {
     listen: () => Promise.resolve(),
     invoke,
     setupSettings: () => {},
-    setupChat: () => ({open: async () => true}),
+    setupChat: () => ({open: chatOpen}),
     renderMarkdown: body => body,
     externalMarkdownUrl: () => null,
     openUrl: async () => {},
@@ -200,4 +201,29 @@ test('failed move keeps the current entry and restores its notebook selection', 
   assert.equal(app.run('current.meta.path'), 'a.md');
   assert.equal(app.element('reader-notebook').value, '');
   assert.equal(app.element('reader-move').disabled, false);
+});
+
+
+test('opening notebook chat keeps editor visible and retains its draft', async () => {
+  const opened = [];
+  const app = frontend(async command => command === 'list_notebooks' ? ['Ideas'] : null, async notebook => { opened.push(notebook); return true; });
+  app.editor.value = 'Keep writing here';
+  await app.run('openNotebookChat("Ideas")');
+  assert.deepEqual(opened, ['Ideas']);
+  assert.equal(app.run('mode'), 'write');
+  assert.equal(app.element('write').style.visibility, 'visible');
+  assert.equal(app.element('chat').hidden, false);
+  assert.equal(app.element('write-notebook').value, 'Ideas');
+  assert.equal(app.editor.value, 'Keep writing here');
+});
+
+test('rejected chat notebook switch restores editor notebook selection', async () => {
+  let allow = true;
+  const app = frontend(async () => null, async () => allow);
+  await app.run('openNotebookChat("Ideas")');
+  allow = false;
+  app.element('write-notebook').value = 'Work';
+  assert.equal(await app.run('syncWritingChat()'), false);
+  assert.equal(app.element('write-notebook').value, 'Ideas');
+  assert.equal(app.run('chatNotebook'), 'Ideas');
 });

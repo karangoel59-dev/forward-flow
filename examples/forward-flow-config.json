@@ -7,17 +7,26 @@
     "openai": {
       "provider": "openai",
       "model": "gpt-4.1-mini",
-      "api_key": ""
+      "api_key": "",
+      "models": [
+        "gpt-4.1-mini"
+      ]
     },
     "claude": {
       "provider": "claude",
       "model": "claude-sonnet-4-6",
-      "api_key": ""
+      "api_key": "",
+      "models": [
+        "claude-sonnet-4-6"
+      ]
     },
     "gemini": {
       "provider": "gemini",
-      "model": "gemini-2.5-flash",
-      "api_key": ""
+      "model": "gemini-3.8-flash",
+      "api_key": "",
+      "models": [
+        "gemini-3.8-flash"
+      ]
     }
   },
   "mcp_servers": {

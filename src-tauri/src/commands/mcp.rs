@@ -19,3 +19,11 @@ pub(crate) fn remove_mcp_server(app: AppHandle, id: String) -> Result<(), String
 pub(crate) fn enable_mcp_server(app: AppHandle, id: String, enabled: bool) -> Result<(), String> {
     mcp::enable(&app, &id, enabled)
 }
+
+#[tauri::command]
+pub(crate) async fn reconnect_mcp_server(
+    app: AppHandle,
+    id: String,
+) -> Result<ServerStatus, String> {
+    mcp::reconnect(&app, &id).await
+}

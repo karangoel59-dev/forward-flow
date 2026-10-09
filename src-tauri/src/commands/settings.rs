@@ -1,5 +1,5 @@
 use crate::{
-    ai::{providers, Connection},
+    ai::Connection,
     config::{self, GitSettings},
     mcp::{self, Server},
     vault_git,
@@ -31,17 +31,15 @@ fn parse(text: &str) -> Result<PortableConfig, String> {
     if cfg.version != 1 {
         return Err("Unsupported config version".into());
     }
-    if cfg.models.len() > 3 || cfg.mcp_servers.len() > 64 {
+    if cfg.models.len() > 64 || cfg.mcp_servers.len() > 64 {
         return Err("Too many connections in config file".into());
     }
     if let Some(remote) = &cfg.git.remote {
         validate_remote(remote)?;
     }
-    for (id, model) in &cfg.models {
-        if id != &model.provider {
-            return Err("Model keys must match their provider".into());
-        }
-        providers::validate(&model.provider, &model.model)?;
+    for (id, model) in &mut cfg.models {
+        crate::ai::validate_id(id, &model.provider)?;
+        crate::ai::normalize(model)?;
         if model.api_key.len() > 16_000 {
             return Err("API key is too long".into());
         }
@@ -156,9 +154,23 @@ pub(crate) fn import_settings(app: AppHandle, text: String) -> Result<String, St
                 connection.api_key = cfg
                     .models
                     .get(&id)
+                    .filter(|old| {
+                        old.provider == connection.provider
+                            && old.endpoint.trim_end_matches('/')
+                                == connection.endpoint.trim_end_matches('/')
+                    })
                     .map(|c| c.api_key.clone())
                     .unwrap_or_default();
             }
+            if let Some(old) = cfg
+                .models
+                .get(&id)
+                .filter(|old| old.provider == connection.provider)
+            {
+                connection.models.extend(old.models.clone());
+                connection.models.push(old.model.clone());
+            }
+            crate::ai::normalize(&mut connection)?;
             cfg.models.insert(id, connection);
         }
         for (id, mut server) in imported.mcp_servers {
@@ -195,6 +207,22 @@ mod tests {
         assert!(parse(r#"{"version":1,"git":{"remote":"file:///tmp/repo"}}"#).is_err());
     }
     #[test]
+    fn named_connections_import_multiple_models_and_keep_secrets_out_of_safe_exports() {
+        let parsed=parse(r#"{"version":1,"models":{"azure-voice":{"provider":"azure_openai","model":"one","models":["one","two"],"endpoint":"https://voice.openai.azure.com","api_key":"secret"},"azure_openai":{"provider":"azure_openai","model":"other","endpoint":"https://main.openai.azure.com","api_key":"other-secret"}}}"#).unwrap();
+        assert_eq!(parsed.models["azure-voice"].models, vec!["one", "two"]);
+        assert_eq!(parsed.models.len(), 2);
+        let cfg = config::Config {
+            models: parsed.models,
+            ..Default::default()
+        };
+        let exported = portable(cfg, false);
+        let json = serde_json::to_string(&exported).unwrap();
+        assert!(!json.contains("secret"));
+        assert!(json.contains("azure-voice"));
+        assert!(json.contains("two"));
+        assert!(parse(r#"{"version":1,"models":{"azure-voice":{"provider":"azure_openai","model":"one","models":["../invalid"],"endpoint":"https://voice.openai.azure.com"}}}"#).is_err());
+    }
+    #[test]
     fn example_and_device_config_are_portable() {
         let example = include_str!("../../../examples/forward-flow-config.json");
         assert_eq!(parse(example).unwrap().models.len(), 3);
@@ -213,7 +241,9 @@ mod tests {
             Connection {
                 provider: "openai".into(),
                 model: "gpt-4.1-mini".into(),
+                models: vec![],
                 api_key: "private-key".into(),
+                endpoint: String::new(),
             },
         );
         cfg.mcp_servers.insert(

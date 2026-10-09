@@ -29,9 +29,11 @@
         <div class="wordmark">forward flow<span class="brand-dot">.</span></div>
         <span class="eyebrow">A little further, every day.</span>
       </header>
+      <div id="writing-workspace" class="writing-workspace">
+      <section class="writing-pane" aria-label="Entry editor">
       <div class="writing-label">
         <span class="eyebrow">THE NEXT PAGE</span>
-        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button">+ New notebook</button><button id="write-chat" class="text-button" type="button">Chat ↗</button></div>
+        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button">+ New notebook</button><button id="write-chat" class="text-button" type="button" aria-expanded="true" aria-controls="chat">Chat ↗</button></div>
       </div>
       <textarea
         id="editor"
@@ -43,13 +45,49 @@
         placeholder="Let the next thought begin."
       ></textarea>
 
+      <p class="writing-note">Write freely. Commit when you’re ready. Then begin again.</p>
+      </section>
+    <aside id="chat" class="chat-panel" aria-label="Notebook chat">
+      <div class="chat-inner">
+        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><button id="chat-close" class="text-button" type="button">Hide chat</button></div>
+        <details class="chat-settings"><summary>Purpose & connections</summary>
+        <details class="chat-details"><summary>Notebook purpose</summary><label for="chat-purpose" class="hint">Guide the tone, goals, and kind of pages you want to create.</label><textarea id="chat-purpose" rows="3" placeholder="Help me develop practical ideas for my next project."></textarea><button id="chat-purpose-save" class="text-button" type="button">Save purpose</button></details>
+        <details id="ai-settings" class="chat-details"><summary>AI connections</summary>
+          <form id="ai-form" class="ai-form"><label for="ai-connection">Saved connection</label><select id="ai-connection"><option value="">New connection</option></select><label for="ai-connection-name">Connection name</label><input id="ai-connection-name" maxlength="48" placeholder="Default provider name, or azure-voice" /><label for="ai-provider">Provider type</label><select id="ai-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><div id="ai-endpoint-field" class="ai-form" hidden><label for="ai-endpoint">Azure endpoint</label><input id="ai-endpoint" type="url" placeholder="https://your-resource.openai.azure.com" /></div><label id="ai-model-label" for="ai-model">Model ID</label><input id="ai-model" required /><label for="ai-saved-models">Saved models / deployments</label><textarea id="ai-saved-models" rows="3" placeholder="One model or deployment per line"></textarea><label for="ai-key">API key</label><input id="ai-key" type="password" autocomplete="off" /><p class="hint">Keys are stored in this device’s app settings and never synced. A connected provider receives your messages, notebook purpose, and pages when you send.</p><button id="ai-save" class="ghost-btn" type="submit">Save connection</button></form>
+        </details>
+        <details id="mcp-settings" class="chat-details"><summary>External MCP tools</summary>
+          <p class="hint">Connect a Streamable HTTP MCP server. External calls show the server and arguments for approval before running. Results are shared with your chat provider.</p>
+          <div id="mcp-list"></div>
+          <form id="mcp-form" class="ai-form"><label for="mcp-name">Server name</label><input id="mcp-name" required maxlength="24" placeholder="research" /><label for="mcp-url">MCP endpoint</label><input id="mcp-url" type="url" required placeholder="https://example.com/mcp" /><label for="mcp-token">Bearer token (optional)</label><input id="mcp-token" type="password" autocomplete="off" /><p class="hint">Server settings and tokens stay on this device, outside the synced vault. This connection uses an endpoint and optional token; OAuth sign-in and local command servers are not supported yet.</p><button id="mcp-connect" class="ghost-btn" type="submit">Connect & discover tools</button><p id="mcp-status" class="hint" role="status"></p></form>
+        </details>
+        </details>
+        <div class="notebook-controls"><label for="chat-provider" class="hint">Chat with</label><select id="chat-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button id="chat-reset" class="text-button" type="button">New conversation</button></div>
+        <p id="chat-model-current" class="hint"></p>
+        <p id="chat-context" class="hint"></p>
+        <div id="chat-log" role="log" aria-label="Notebook conversation"></div>
+        <p id="chat-status" class="hint" role="status" aria-live="polite"></p>
+        <section id="chat-command-panel" class="chat-command-panel" aria-label="Chat command results" aria-live="polite" hidden>
+          <div class="chat-command-head"><h2 id="chat-command-title"></h2><button id="chat-command-close" class="text-button" type="button" aria-label="Close command results">Close</button></div>
+          <div id="chat-command-results"></div>
+        </section>
+        <form id="chat-form">
+          <div id="chat-command-suggestions" class="chat-command-suggestions" role="listbox" aria-label="Chat commands" hidden></div>
+          <div class="chat-composer">
+            <textarea id="chat-input" rows="2" aria-label="Message your notebook" aria-controls="chat-command-suggestions" aria-expanded="false" placeholder="Ask your notebook, or type / for commands…" required></textarea>
+            <div class="chat-composer-footer"><span class="hint">Notebook + current draft</span><button id="chat-send" type="submit" aria-label="Send message" title="Send message (⌘ / Ctrl + Enter)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></button></div>
+          </div>
+        </form>
+        <section id="chat-page-panel" hidden><form id="chat-page-form"><h2>Make this a page.</h2><label for="chat-page" class="hint">Review and edit before saving. Saved pages are immutable.</label><textarea id="chat-page" rows="10" required></textarea><div class="remote-actions"><button id="chat-page-save" class="ghost-btn" type="submit">Save page</button><button id="chat-page-cancel" class="text-button" type="button">Cancel</button></div></form></section>
+      </div>
+    </aside>
+
+      </div>
       <nav class="touchbar touchbar-top" aria-label="Writing actions">
         <button id="touch-entries" type="button">Entries</button>
         <button id="touch-resync" type="button">Sync</button>
         <button id="touch-remote" type="button">Settings</button>
         <button id="touch-commit" type="button">Commit entry <span aria-hidden="true">↗</span></button>
       </nav>
-      <p class="writing-note">Write freely. Commit when you’re ready. Then begin again.</p>
       <div id="write-count" class="hint write-count" hidden></div>
     </main>
 
@@ -151,10 +189,12 @@
           github.com/settings/tokens with the “repo” scope.
         </p>
         <details class="chat-details config-settings"><summary>Portable setup config</summary>
+          <div class="config-settings-content">
           <p class="hint">One JSON file for model connections, MCP servers, and Git settings. Import before choosing a folder to get started on another device.</p>
           <div class="remote-actions"><button id="settings-import-config" class="ghost-btn" type="button">Import config</button><button id="settings-export-config" class="ghost-btn" type="button">Export config</button></div>
-          <label class="hint"><input id="config-secrets" type="checkbox" /> Include API keys and tokens</label>
+          <label class="hint config-secrets-option"><input id="config-secrets" type="checkbox" /> Include API keys and tokens</label>
           <p class="hint">Files with credentials contain readable secrets. Keep them private. Vault folders and chat history stay on this device.</p>
+          </div>
         </details>
         <div class="remote-actions">
           <button id="remote-save" class="ghost-btn" type="button">Save</button>
@@ -175,26 +215,6 @@
       </form>
     </section>
 
-    <section id="chat" class="veil" hidden>
-      <div class="chat-inner">
-        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><button id="chat-close" class="text-button" type="button">Back ↗</button></div>
-        <details class="chat-details"><summary>Notebook purpose</summary><label for="chat-purpose" class="hint">Guide the tone, goals, and kind of pages you want to create.</label><textarea id="chat-purpose" rows="3" placeholder="Help me develop practical ideas for my next project."></textarea><button id="chat-purpose-save" class="text-button" type="button">Save purpose</button></details>
-        <details id="ai-settings" class="chat-details"><summary>AI connections</summary>
-          <form id="ai-form" class="ai-form"><label for="ai-provider">Provider</label><select id="ai-provider"><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><label for="ai-model">Model ID</label><input id="ai-model" required /><label for="ai-key">API key</label><input id="ai-key" type="password" autocomplete="off" /><p class="hint">Keys are stored in this device’s app settings and never synced. A connected provider receives your messages, notebook purpose, and pages when you send.</p><button id="ai-save" class="ghost-btn" type="submit">Save connection</button></form>
-        </details>
-        <details id="mcp-settings" class="chat-details"><summary>External MCP tools</summary>
-          <p class="hint">Connect a Streamable HTTP MCP server. External calls show the server and arguments for approval before running. Results are shared with your chat provider.</p>
-          <div id="mcp-list"></div>
-          <form id="mcp-form" class="ai-form"><label for="mcp-name">Server name</label><input id="mcp-name" required maxlength="24" placeholder="research" /><label for="mcp-url">MCP endpoint</label><input id="mcp-url" type="url" required placeholder="https://example.com/mcp" /><label for="mcp-token">Bearer token (optional)</label><input id="mcp-token" type="password" autocomplete="off" /><p class="hint">Server settings and tokens stay on this device, outside the synced vault. This connection uses an endpoint and optional token; OAuth sign-in and local command servers are not supported yet.</p><button id="mcp-connect" class="ghost-btn" type="submit">Connect & discover tools</button><p id="mcp-status" class="hint" role="status"></p></form>
-        </details>
-        <div class="notebook-controls"><label for="chat-provider" class="hint">Chat with</label><select id="chat-provider"><option value="openai">OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button id="chat-reset" class="text-button" type="button">New conversation</button></div>
-        <p id="chat-context" class="hint"></p>
-        <div id="chat-log" role="log" aria-label="Notebook conversation"></div>
-        <p id="chat-status" class="hint" role="status" aria-live="polite"></p>
-        <form id="chat-form"><label for="chat-input" class="hint">Message</label><textarea id="chat-input" rows="3" placeholder="Ask a question or describe the page you want…" required></textarea><button id="chat-send" class="ghost-btn" type="submit">Send ↗</button></form>
-        <section id="chat-page-panel" hidden><form id="chat-page-form"><h2>Make this a page.</h2><label for="chat-page" class="hint">Review and edit before saving. Saved pages are immutable.</label><textarea id="chat-page" rows="10" required></textarea><div class="remote-actions"><button id="chat-page-save" class="ghost-btn" type="submit">Save page</button><button id="chat-page-cancel" class="text-button" type="button">Cancel</button></div></form></section>
-      </div>
-    </section>
 
     <div id="hud" class="hint" role="status" aria-live="polite"></div>
   </body>

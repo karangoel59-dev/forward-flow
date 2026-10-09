@@ -77,7 +77,7 @@ pub(crate) fn commit_entry(
     Ok(meta)
 }
 
-fn write_page(
+pub(crate) fn write_page(
     dir: &PathBuf,
     entry_dir: &PathBuf,
     body: &str,

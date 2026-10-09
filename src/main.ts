@@ -28,7 +28,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook" | "chat";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -147,12 +147,49 @@ async function moveCurrentEntry() {
   }
 }
 
-let chatOrigin: Mode = "write";
-const chatController = setupChat(() => show(chatOrigin), message => hud(message, 5000));
+let editorRevision = 0;
+let editorToolBusy = false;
+editor.addEventListener("input", () => { editorRevision++; });
+let chatNotebook: string | null = null;
+let chatVisible = true;
+const chatController = setupChat(() => {
+  chatVisible = false;
+  el<HTMLElement>("chat").hidden = true;
+  el<HTMLElement>("writing-workspace").classList.add("chat-hidden");
+  el<HTMLButtonElement>("write-chat").setAttribute("aria-expanded", "false");
+  scheduleFit(true);
+}, message => hud(message, 5000), {
+  snapshot: () => ({content: editor.value, notebook: writeNotebook.value, revision: editorRevision}),
+  lock: () => {
+    if (committing || editorToolBusy) return false;
+    editorToolBusy = true; editor.readOnly = true; writeNotebook.disabled = true;
+    clearTimeout(draftTimer);
+    return true;
+  },
+  unlock: () => { editorToolBusy = false; editor.readOnly = false; writeNotebook.disabled = false; scheduleDraftSave(); },
+  replace: async content => {
+    editor.value = content; editorRevision++; updateLiveCount(); scheduleFit(true);
+    await invoke("save_draft", {content}).catch(e => hud(`Draft updated; local save will retry: ${String(e)}`, 5000));
+  },
+});
+async function syncWritingChat() {
+  const selected = writeNotebook.value;
+  if (selected === chatNotebook) return true;
+  if (await chatController.open(selected)) { chatNotebook = selected; return true; }
+  if (chatNotebook !== null) writeNotebook.value = chatNotebook;
+  return false;
+}
 async function openNotebookChat(notebook: string) {
   if (notebook === "*") { hud("Choose a notebook or Inbox to chat."); return; }
-  const origin = mode;
-  if (await chatController.open(notebook)) { chatOrigin = origin; show("chat"); }
+  if (notebook !== chatNotebook && !await chatController.open(notebook)) return;
+  chatNotebook = notebook;
+  writeNotebook.value = notebook;
+  chatVisible = true;
+  el<HTMLElement>("chat").hidden = false;
+  el<HTMLElement>("writing-workspace").classList.remove("chat-hidden");
+  el<HTMLButtonElement>("write-chat").setAttribute("aria-expanded", "true");
+  show("write");
+  el<HTMLTextAreaElement>("chat-input").focus();
 }
 const win = getCurrentWindow();
 
@@ -296,10 +333,11 @@ function show(next: Mode) {
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
   notebookView.hidden = next !== "notebook";
-  el<HTMLElement>("chat").hidden = next !== "chat";
+  el<HTMLElement>("chat").hidden = !chatVisible;
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
   if (next === "write") {
+    void syncWritingChat();
     editor.focus();
     updateLiveCount();
     scheduleFit(true);
@@ -365,7 +403,7 @@ async function resync() {
 // commit
 
 async function commit() {
-  if (committing) return;
+  if (committing || editorToolBusy) return;
   if (!editor.value.trim()) {
     hud("nothing written yet");
     return;
@@ -823,7 +861,7 @@ document.addEventListener("keydown", (e) => {
   const typing =
     e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement;
 
-  if (mode === "notebook" || mode === "chat") return;
+  if (mode === "notebook" || (e.target as HTMLElement | null)?.closest("#chat")) return;
   if (e.target instanceof HTMLSelectElement && !mod) return;
 
   if (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "f") {
@@ -972,6 +1010,7 @@ readerBody.addEventListener("click", (event) => {
   else hud("Use a full http, https, or mailto link.");
 });
 
+writeNotebook.addEventListener("change", () => { void syncWritingChat(); });
 el<HTMLButtonElement>("write-chat").addEventListener("click", () => openNotebookChat(writeNotebook.value));
 el<HTMLButtonElement>("picker-chat").addEventListener("click", () => openNotebookChat(pickerNotebook.value));
 
@@ -1020,7 +1059,7 @@ window.addEventListener("resize", () => scheduleFit(true));
 // Preserve touch-button clicks when returning focus to the editor.
 document.addEventListener("mousedown", (e) => {
   const target = e.target as HTMLElement | null;
-  if (mode === "write" && target !== editor && !target?.closest("button, input, select, label, .touchbar")) {
+  if (mode === "write" && target !== editor && !target?.closest("button, input, select, label, textarea, .touchbar, #chat")) {
     e.preventDefault();
     editor.focus();
   }
