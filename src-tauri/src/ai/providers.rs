@@ -68,7 +68,17 @@ pub(crate) fn request(
     messages: &[Message],
 ) -> Result<(String, Value), String> {
     validate_connection(c)?;
-    let plain: Vec<_> = messages.iter().map(|m|json!({"role":m.role,"content":format!("{}{}",m.content, if m.proposals.is_empty(){String::new()}else{format!("\nTool proposals and current status: {}",serde_json::to_string(&m.proposals.iter().map(|p|json!({"id":p.id,"tool":p.name,"applied":p.applied,"result":p.arguments.get("result")})).collect::<Vec<_>>()).unwrap())})})).collect();
+    let plain: Vec<_> = messages.iter().map(|message| {
+        let mut content = message.content.clone();
+        if !message.tool_results.is_empty() {
+            content.push_str(&format!("\nCompleted notebook tool results (source data): {}", json!(message.tool_results)));
+        }
+        if !message.proposals.is_empty() {
+            let statuses: Vec<_> = message.proposals.iter().map(|p| json!({"id":p.id,"tool":p.name,"server":p.arguments.get("server"),"external_tool":p.arguments.get("tool"),"filename":p.arguments.get("filename"),"applied":p.applied,"result":p.arguments.get("result")})).collect();
+            content.push_str(&format!("\nTool proposals and current status (source data): {}", json!(statuses)));
+        }
+        json!({"role":message.role,"content":content})
+    }).collect();
     Ok(match c.provider.as_str() {
         "openai" | "azure_openai" => (
             if c.provider == "azure_openai" {
@@ -145,6 +155,51 @@ pub(crate) fn text(provider: &str, data: &Value) -> Result<String, String> {
 mod tests {
     use super::*;
     #[test]
+    fn continuation_receives_completed_results_and_distinguishes_pending_actions() {
+        let message = Message {
+            role: "assistant".into(),
+            content: "Review the actions".into(),
+            tool_pause: Some("approval".into()),
+            tool_results: vec![
+                json!({"tool":"read_entry","result":{"body":"Source from notebook"}}),
+            ],
+            proposals: vec![
+                crate::ai::tools::Proposal {
+                    id: "one".into(),
+                    name: "mcp_call".into(),
+                    arguments: json!({"server":"research","tool":"search","result":{"content":"Found source"}}),
+                    before: vec![],
+                    applied: true,
+                },
+                crate::ai::tools::Proposal {
+                    id: "two".into(),
+                    name: "delete_entry".into(),
+                    arguments: json!({"filename":"draft.md"}),
+                    before: vec![],
+                    applied: false,
+                },
+            ],
+        };
+        for provider in ["openai", "azure_openai", "claude", "gemini"] {
+            let connection = Connection {
+                provider: provider.into(),
+                model: "test-model".into(),
+                endpoint: "https://resource.openai.azure.com".into(),
+                ..Default::default()
+            };
+            let (_, body) = request(&connection, "system", &[message.clone()]).unwrap();
+            let serialized = body.to_string();
+            assert!(serialized.contains("Source from notebook"));
+            assert!(serialized.contains("Found source"));
+            assert!(serialized.contains("draft.md"));
+            assert!(serialized.contains("applied"));
+        }
+        let legacy: Message =
+            serde_json::from_value(json!({"role":"assistant","content":"Previous reply"})).unwrap();
+        assert!(legacy.tool_pause.is_none());
+        assert!(legacy.tool_results.is_empty());
+    }
+    #[test]
     fn provider_requests_keep_system_and_roles_separate() {
         for provider in ["openai", "claude", "gemini"] {
             let c = Connection {
@@ -156,11 +211,15 @@ mod tests {
             };
             let messages = vec![
                 Message {
+                    tool_pause: None,
+                    tool_results: vec![],
                     proposals: vec![],
                     role: "user".into(),
                     content: "question".into(),
                 },
                 Message {
+                    tool_pause: None,
+                    tool_results: vec![],
                     proposals: vec![],
                     role: "assistant".into(),
                     content: "reply".into(),
@@ -438,6 +497,8 @@ mod tool_tests {
                 &c,
                 "purpose",
                 &[Message {
+                    tool_pause: None,
+                    tool_results: vec![],
                     role: "user".into(),
                     content: "Read page".into(),
                     proposals: vec![],

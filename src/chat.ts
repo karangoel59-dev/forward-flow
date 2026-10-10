@@ -1,19 +1,17 @@
+import { setupChatActions, type Proposal, type EditorBridge } from "./chat-actions";
 import { setupChatCommands, connectionId } from "./chat-commands";
 import { setupMcp } from "./mcp";
 import { invoke } from "@tauri-apps/api/core";
 import { renderMarkdown, externalMarkdownUrl } from "./markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-type Proposal = { id: string; name: string; arguments: Record<string, unknown>; before: [string, string][]; applied: boolean };
-type Message = { proposals?: Proposal[]; role: "user" | "assistant"; content: string };
+type Message = { proposals?: Proposal[]; tool_pause?: string; role: "user" | "assistant"; content: string };
 type Connection = { id?: string; models?: string[]; provider: string; model: string; configured: boolean; endpoint?: string };
 type NotebookChat = { purpose: string; messages: Message[]; pages: number };
 type Reply = { messages: Message[]; included_pages: number; total_pages: number };
 const defaults: Record<string, string> = { azure_openai: "", openai: "gpt-4.1-mini", claude: "claude-sonnet-4-6", gemini: "gemini-3.8-flash" };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-type EditorContext = {content: string; notebook: string; revision: number};
-type EditorBridge = { snapshot: () => EditorContext; lock: () => boolean; unlock: () => void; replace: (content: string) => Promise<void> };
 export function setupChat(close: () => void, notify: (message: string) => void, editor?: EditorBridge) {
   const mcp = setupMcp(notify);
   const provider = el<HTMLSelectElement>("chat-provider");
@@ -37,6 +35,14 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   let version = 0;
   let opening = false;
 
+  const actions = setupChatActions({
+    notebook: () => notebook,
+    unavailable: () => busy || saving || opening || purposeSaving,
+    running: value => { saving = value; setBusy(value, "Running approved actions…"); if (!value) render(); },
+    refreshHistory: async () => { const data = await invoke<NotebookChat>("get_notebook_chat", {notebook}); messages = data.messages; render(); },
+    notify,
+    editor,
+  });
   const commands = setupChatCommands({
     notebook: () => notebook,
     provider,
@@ -45,7 +51,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     busy: setBusy,
     resume: async id => {
       const data = await invoke<NotebookChat>("resume_notebook_chat", {notebook, id});
-      messages = data.messages; purpose.value = data.purpose; version++;
+      messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
       el<HTMLElement>("chat-page-panel").hidden = true;
       el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
       render();
@@ -55,7 +61,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   });
   async function startNewChat() {
     await invoke("clear_notebook_chat", {notebook});
-    messages = []; version++;
+    messages = []; version++; actions.reset();
     el<HTMLElement>("chat-page-panel").hidden = true;
     render();
   }
@@ -116,59 +122,28 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         });
         article.append(button);
       }
-      for (const proposal of message.proposals || []) {
-        const card = document.createElement("section");
-        card.className = "tool-proposal";
-        const title = document.createElement("p");
-        title.className = "eyebrow";
-        title.textContent = proposal.name.split("_").join(" ");
-        const details = document.createElement("pre");
-        const external = proposal.name === "mcp_call";
-        details.textContent = JSON.stringify(proposal.name.endsWith("_editor") ? { content: proposal.arguments.content, notebook: (proposal.arguments.editor as EditorContext)?.notebook } : external ? { server: proposal.arguments.server, endpoint: proposal.arguments.endpoint, tool: proposal.arguments.tool, input: proposal.arguments.input } : proposal.arguments, null, 2);
-        card.append(title, details);
-        if (proposal.before.length) {
-          const before = document.createElement("details");
-          const label = document.createElement("summary");
-          label.textContent = proposal.name.endsWith("_editor") ? "Original editor draft" : "Original page contents";
-          before.append(label);
-          for (const [filename, contents] of proposal.before) {
-            const source = document.createElement("pre");
-            source.textContent = `${filename}\n${contents}`;
-            before.append(source);
-          }
-          card.append(before);
-        }
-        const apply = document.createElement("button");
-        apply.type = "button";
-        apply.className = "ghost-btn";
-        apply.textContent = proposal.applied ? (external ? "Attempted" : "Applied") : (external ? "Approve & run external tool" : "Apply change");
-        apply.disabled = proposal.applied;
-        apply.addEventListener("click", async () => {
-          if (saving || busy || opening || purposeSaving || proposal.applied) return;
-          const editorTool = proposal.name.endsWith("_editor");
-          if (editorTool && (!editor || !editor.lock())) { notify("Finish saving the editor first."); return; }
-          saving = true;
-          apply.disabled = true;
-          try {
-            const result = await invoke<Record<string, unknown>>("apply_chat_proposal", { notebook, id: proposal.id, editor: editorTool ? editor?.snapshot() : null });
-            if (editorTool && typeof result.editor_content === "string") await editor!.replace(result.editor_content);
-            if (external || editorTool) proposal.arguments.result = result;
-            proposal.applied = true;
-            render();
-            notify(editorTool ? (result.action === "saved" ? "Editor saved as a page. Your draft is still in the editor." : "Editor draft updated.") : external ? "External call finished. Its result is available for your next message." : "Change applied and queued for Git backup.");
-          } catch (e) { notify(String(e)); apply.disabled = false; }
-          finally { saving = false; if (editorTool) editor?.unlock(); }
-        });
-        card.append(apply);
-        if (external && proposal.arguments.result) {
-          const output = document.createElement("pre");
-          output.textContent = JSON.stringify(proposal.arguments.result, null, 2);
-          card.append(output);
-        }
-        article.append(card);
+      const proposals = message.proposals || [];
+      if (proposals.length) {
+        const group = document.createElement("details");
+        group.className = "tool-group";
+        const count = proposals.filter(proposal => !proposal.applied).length;
+        const heading = document.createElement("summary");
+        heading.textContent = count ? `${count} ${count === 1 ? "action needs" : "actions need"} approval` : `${proposals.length} ${proposals.length === 1 ? "action" : "actions"} completed`;
+        group.append(heading);
+        for (const proposal of proposals) group.append(actions.card(proposal));
+        article.append(group);
       }
       log.append(article);
     });
+    const count = actions.refresh(messages.flatMap(message => message.proposals || []));
+    const latest = messages[messages.length - 1];
+    const canContinue = latest?.role === "assistant" && (Boolean(latest.tool_pause) || /Reached the tool (limit|context limit)|too many tools at once/.test(latest.content) || Boolean(latest.proposals?.length));
+    el<HTMLElement>("chat-action-bar").hidden = !count && !canContinue;
+    el<HTMLElement>("chat-action-count").textContent = count ? `${count} ${count === 1 ? "action needs" : "actions need"} approval` : "Ready to continue";
+    el<HTMLElement>("chat-action-hint").textContent = count ? "Review and approve together." : "Use completed results in the next step.";
+    el<HTMLButtonElement>("chat-review-actions").hidden = !count;
+    el<HTMLButtonElement>("chat-continue").hidden = !canContinue;
+    el<HTMLButtonElement>("chat-continue").disabled = busy || saving;
     log.scrollTop = log.scrollHeight;
   }
   function setBusy(value: boolean, status = "Thinking…") {
@@ -177,10 +152,14 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     el<HTMLButtonElement>("chat-send").disabled = value;
     el<HTMLButtonElement>("chat-reset").disabled = value;
     provider.disabled = value;
+    el<HTMLButtonElement>("chat-continue").disabled = value;
+    el<HTMLButtonElement>("chat-history").disabled = value;
+    el<HTMLButtonElement>("chat-review-actions").disabled = value;
+    el<HTMLButtonElement>("chat-options").disabled = value;
     el<HTMLElement>("chat-status").textContent = value ? status : "";
   }
-  async function send() {
-    const text = input.value.trim();
+  async function send(continuation = false) {
+    const text = continuation ? "Continue my previous request using the completed tool results. Do not repeat completed actions; leave any unapproved actions pending." : input.value.trim();
     if (busy || saving || opening || purposeSaving || !text) return;
     if (text.startsWith("/") && await commands.run(text)) return;
     commands.clear();
@@ -201,7 +180,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       const reply = await invoke<Reply>("chat_notebook", { notebook, provider: provider.value, message: text, editor: editor?.snapshot() || null });
       if (active !== version) return;
       messages = reply.messages;
-      input.value = "";
+      if (!continuation) input.value = "";
       render();
       const latest = log.lastElementChild as HTMLElement | null;
       if (latest) log.scrollTop = latest.offsetTop - log.offsetTop;
@@ -214,6 +193,15 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
   });
   el<HTMLButtonElement>("chat-close").addEventListener("click", close);
+  el<HTMLButtonElement>("chat-continue").addEventListener("click", () => void send(true));
+  el<HTMLButtonElement>("chat-history").addEventListener("click", async () => {
+    const draft = input.value;
+    try { await commands.run("/resume"); }
+    finally { input.value = draft; }
+  });
+  const options = el<HTMLDetailsElement>("chat-options-panel");
+  el<HTMLButtonElement>("chat-options").addEventListener("click", () => { options.open = !options.open; });
+  options.addEventListener("toggle", () => { el<HTMLElement>("chat-options").setAttribute("aria-expanded", String(options.open)); });
   settingsConnection.addEventListener("change", () => {
     const connection=connections.find(c=>connectionId(c)===settingsConnection.value);
     connectionName.value=connection?connectionId(connection):"";
@@ -281,6 +269,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         const data = await invoke<NotebookChat>("get_notebook_chat", { notebook: selected });
         await loadConnections();
         notebook = selected;
+        actions.reset();
         commands.clear();
         version++;
         el<HTMLElement>("chat-title").textContent = selected || "Inbox";

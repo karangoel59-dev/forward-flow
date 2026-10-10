@@ -157,6 +157,8 @@ pub(crate) async fn chat_notebook(
             .ok_or("Connect this provider in AI settings first")?;
         let mut messages = ai::history(&app, &dir)?;
         messages.push(Message {
+            tool_pause: None,
+            tool_results: vec![],
             proposals: vec![],
             role: "user".into(),
             content: message.trim().into(),
@@ -184,7 +186,10 @@ pub(crate) async fn chat_notebook(
     ai::providers::attach_tools(&provider, &mut body, &definitions);
     let mut proposals = vec![];
     let mut activity = vec![];
+    let mut tool_results = vec![];
+    let mut result_bytes = 0;
     let mut reply = String::new();
+    let mut tool_pause = None;
     for round in 0..6 {
         let data = match ai::exchange(&connection, &url, &body).await {
             Ok(data) => data,
@@ -210,6 +215,7 @@ pub(crate) async fn chat_notebook(
             break;
         }
         if calls.len() > 8 {
+            tool_pause = Some("tool_limit".into());
             reply =
                 "The model requested too many tools at once. Review proposals already prepared."
                     .into();
@@ -230,12 +236,7 @@ pub(crate) async fn chat_notebook(
                     .ok_or_else(|| "Editor context unavailable".to_string())
                     .and_then(|context| ai::editor::execute(context, &call, id))
             } else if call.name.starts_with("mcp_") {
-                crate::mcp::proposal(&mcp_servers, &call, id).map(|p| {
-                    (
-                        json!({"status":"awaiting_user_review","proposal_id":p.id}),
-                        Some(p),
-                    )
-                })
+                crate::mcp::prepare(&mcp_servers, &call, id)
             } else {
                 ai::tools::execute(&root, &notebook, &call, id)
             };
@@ -249,10 +250,23 @@ pub(crate) async fn chat_notebook(
                 Err(error) => json!({"error":error}),
             };
             activity.push(call.name.clone());
+            if result["status"] != "awaiting_user_review" {
+                let entry = json!({"tool":call.name,"result":result});
+                result_bytes += entry.to_string().len();
+                if result_bytes <= 100_000 {
+                    tool_results.push(entry);
+                }
+            }
             results.push((call, result));
+        }
+        if !proposals.is_empty() {
+            reply = approval_reply(&provider, &data, proposals.len());
+            tool_pause = Some("approval".into());
+            break;
         }
         ai::providers::append_results(&provider, &mut body, &data, &results)?;
         if body.to_string().len() > 350_000 {
+            tool_pause = Some("context_limit".into());
             reply =
                 "Reached the tool context limit. Review proposals or ask a more focused question."
                     .into();
@@ -260,16 +274,16 @@ pub(crate) async fn chat_notebook(
         }
     }
     if reply.is_empty() {
-        reply="Reached the tool limit for this turn. Review the proposals below or ask a follow-up question.".into();
-    }
-    if !activity.is_empty() {
-        reply.push_str(&format!("\n\nTools used: {}.", activity.join(", ")));
+        tool_pause = Some("tool_limit".into());
+        reply = "This step reached its tool budget. Choose Continue to keep working from the current results.".into();
     }
 
     messages.push(Message {
         role: "assistant".into(),
         content: reply,
         proposals,
+        tool_pause,
+        tool_results,
     });
     ai::history::save(
         &app,
@@ -284,9 +298,32 @@ pub(crate) async fn chat_notebook(
     })
 }
 
+fn approval_reply(provider: &str, data: &Value, count: usize) -> String {
+    let text = ai::providers::text(provider, data).unwrap_or_default();
+    let notice = format!(
+        "Prepared {count} {} for your review. Approve the actions you want to run, then continue with their results.",
+        if count == 1 { "action" } else { "actions" }
+    );
+    if text.trim().is_empty() {
+        notice
+    } else {
+        format!("{text}\n\n{notice}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tool_reply_pauses_for_review_without_requiring_another_provider_round() {
+        let data =
+            json!({"output":[{"type":"function_call","name":"create_entry","arguments":"{}"}]});
+        let reply = approval_reply("openai", &data, 2);
+        assert!(reply.contains("Prepared 2 actions"));
+        assert!(!reply.contains("tool limit"));
+        let data = json!({"content":[{"type":"text","text":"Here is the proposed edit."}]});
+        assert!(approval_reply("claude", &data, 1).starts_with("Here is the proposed edit."));
+    }
     #[test]
     fn context_is_limited_to_the_selected_notebook() {
         let root = std::env::temp_dir().join(format!("ff-chat-context-{}", std::process::id()));
@@ -371,6 +408,7 @@ pub(crate) async fn apply_chat_proposal(
         } else {
             let result = ai::tools::apply(&root, &notebook, proposal)?;
             proposal.applied = true;
+            proposal.arguments["result"] = result.clone();
             let name = proposal.name.clone();
             ai::save_history(&app, &dir, &messages)?;
             if name == "sync_vault" {

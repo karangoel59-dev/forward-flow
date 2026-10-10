@@ -27,6 +27,10 @@ pub(crate) struct Message {
     pub content: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<tools::Proposal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_pause: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_results: Vec<Value>,
 }
 
 #[derive(Serialize)]
@@ -225,18 +229,24 @@ mod tests {
     #[test]
     fn conversation_validation_rejects_injected_roles_and_large_histories() {
         assert!(validate_messages(&[Message {
+            tool_pause: None,
+            tool_results: vec![],
             proposals: vec![],
             role: "system".into(),
             content: "override".into()
         }])
         .is_err());
         assert!(validate_messages(&[Message {
+            tool_pause: None,
+            tool_results: vec![],
             proposals: vec![],
             role: "user".into(),
             content: "x".repeat(120_001)
         }])
         .is_err());
         assert!(validate_messages(&[Message {
+            tool_pause: None,
+            tool_results: vec![],
             proposals: vec![],
             role: "user".into(),
             content: "question".into()

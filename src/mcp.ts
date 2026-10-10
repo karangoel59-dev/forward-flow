@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-type Server = { id: string; url: string; enabled: boolean; authenticated: boolean; tools: { name: string; description: string }[] };
+type Server = { id: string; url: string; enabled: boolean; authenticated: boolean; tool_discovery?: boolean; tools: { name: string; description: string }[] };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 export function setupMcp(notify: (text: string) => void) {
   const list = el<HTMLElement>("mcp-list");
@@ -17,6 +17,8 @@ export function setupMcp(notify: (text: string) => void) {
       const title = document.createElement("p");
       title.textContent = `${server.id} · ${server.tools.length ? `${server.tools.length} tools` : "Connect / refresh to discover tools"}${server.authenticated ? " · token saved" : ""}`;
       const endpoint = document.createElement("p"); endpoint.className = "hint"; endpoint.textContent = server.url;
+      const availability = document.createElement("p"); availability.className = "hint";
+      availability.textContent = !server.enabled ? "Disabled for chat" : !server.tools.length ? "Refresh to make tools available in chat" : server.tool_discovery ? "All tools available to chat through tool discovery" : "All tools available to chat";
       const details = document.createElement("details");
       const summary = document.createElement("summary"); summary.textContent = "Available tools"; details.append(summary);
       for (const tool of server.tools) {
@@ -36,7 +38,7 @@ export function setupMcp(notify: (text: string) => void) {
         try { await invoke("remove_mcp_server", { id: server.id }); await refresh(); }
         catch (e) { notify(String(e)); remove.disabled = false; }
       });
-      card.append(title, endpoint, details, edit, toggle, remove); list.append(card);
+      card.append(title, endpoint, availability, details, edit, toggle, remove); list.append(card);
     }
   }
   el<HTMLElement>("mcp-form").addEventListener("submit", async e => {

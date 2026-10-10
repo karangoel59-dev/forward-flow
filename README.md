@@ -95,8 +95,9 @@ Page tools are restricted to the selected notebook. A revision creates a new
 page, copies its tags, and links it to the preserved original. If a page changes
 before a proposal is applied, the proposal is rejected. Each turn permits at
 most six provider rounds with eight tool calls per round. Git history shows
-vault commit summaries; the model cannot run shell commands or arbitrary Git
-operations. Markdown tables work; chart rendering is not included yet.
+vault commit summaries. Shell access and arbitrary Git operations require an
+external MCP server exposing those tools. Markdown tables work; chart rendering
+is not included yet.
 
 ### External MCP servers
 
@@ -117,13 +118,32 @@ tool, and arguments. The call’s text and structured result is stored in chat
 history and included in subsequent messages to the selected LLM. Calls are not
 automatically retried; an interrupted request might already have executed on
 the server. An attempted call cannot be applied again from the same proposal.
-Tool schemas are rechecked before invocation. Up to 64 external tools are
-exposed to the model, with bounded response and argument sizes.
+Tool schemas are rechecked before invocation. With up to 64 external tools,
+chat receives their definitions directly. Larger tool sets use
+`mcp_discover_tools` to find tool schemas and `mcp_call_tool` to propose a call.
+All enabled servers remain accessible, including servers added later in the
+list. Discovery reads cached metadata without approval; remote execution still
+requires approval. Each server supports up to 64 tools, with bounded response
+and argument sizes. Settings and `/mcp` show when discovery is used.
 
 Server settings and bearer tokens live in `config.json` in app settings,
 with owner-only permissions on Unix. Tokens stay outside Git and are not sent
 as tool definitions or LLM credentials. Tokens are stored locally without
 keychain encryption. On Android, localhost refers to the phone itself.
+
+On phones, **Write**, **Chat**, **Pages**, and **Settings** navigation keeps one
+workspace visible at a time. Switching between writing and chat preserves your
+draft and conversation. Desktop keeps the editor and chat side by side. Chat
+**History** opens previous conversations; **Options** holds purpose and connection
+settings.
+
+Pending tool actions appear in a compact review panel. Choose **Review actions**,
+inspect details, select the actions you want, and **Approve & run selected**.
+Actions run in order and stop if one fails; completed external calls cannot be
+run again from the same proposal. **Continue** sends a follow-up using the saved
+results. Chat pauses as soon as an action needs approval, rather than spending
+more provider rounds on the pending action. Read-only rounds retain their tool
+budget; **Continue** starts another step when that budget is reached.
 
 ## Notebooks
 

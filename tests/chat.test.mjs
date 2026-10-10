@@ -12,6 +12,11 @@ function chat(invoke, editor) {
   const commandsSource=readFileSync(new URL('../src/chat-commands.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
   const compiledCommands=ts.transpileModule(commandsSource,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
   vm.runInContext(`globalThis.setupChatCommands = (() => {${compiledCommands}; globalThis.connectionId = connectionId; return setupChatCommands;})();`,context);
+  window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  const actionSource=readFileSync(new URL('../src/chat-actions.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
+  const compiledActions=ts.transpileModule(actionSource,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
+  vm.runInContext(`globalThis.setupChatActions = (() => {${compiledActions}; return setupChatActions;})();`,context);
   const source = readFileSync(new URL('../src/chat.ts', import.meta.url), 'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
   vm.runInContext(ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText,context);
   const controller = context.setupChat(()=>{},message=>notices.push(message),editor);
@@ -165,7 +170,7 @@ test('slash provider and model commands stay local and preserve the editor draft
 });
 
 test('MCP commands show servers and reconnect using saved backend credentials',async()=>{
-  const calls=[];const servers=[{id:'research',url:'https://example.com/mcp',enabled:false,tools:[]}];
+  const calls=[];const servers=[{id:'research',url:'https://example.com/mcp',enabled:false,tool_discovery:true,tools:[{name:'search'}]}];
   const app=chat(async(command,args)=>{
     calls.push([command,args]);
     if(command==='get_notebook_chat')return notebook;
@@ -180,6 +185,8 @@ test('MCP commands show servers and reconnect using saved backend credentials',a
   app.element('chat-input').value='/mcp reconnect research';app.submit('chat-form');await app.settle();
   assert.equal(calls.find(([c])=>c==='reconnect_mcp_server')[1].id,'research');assert.equal(servers[0].enabled,false);
   app.element('chat-input').value='/mcp enable research';app.submit('chat-form');await app.settle();assert.equal(servers[0].enabled,true);
+  app.element('chat-input').value='/mcp';app.submit('chat-form');await app.settle();
+  assert.match(app.element('chat-command-results').textContent,/Available through discovery/);
   assert.equal(calls.some(([c])=>c==='connect_mcp_server'||c==='chat_notebook'),false);
 });
 
@@ -272,4 +279,74 @@ test('connection settings create a named profile with a saved model list',async(
   const saved=calls.find(([c])=>c==='set_ai_connection')[1];assert.equal(saved.id,'azure-voice');assert.equal(saved.connection.provider,'azure_openai');
   assert.deepEqual(Array.from(saved.connection.models),['voice-one','voice-two']);assert.equal(app.element('ai-key').value,'');
   assert.equal(app.element('chat-provider').value,'azure-voice');assert.equal(connections[0].model,'gpt-4.1-mini');
+});
+
+test('selected actions run once in order and continuation preserves composer text',async()=>{
+  const calls=[];
+  const proposals=['one','two','three'].map(id=>({id,name:'mcp_call',arguments:{server:'research',endpoint:'https://example.com/mcp',tool:`search_${id}`,input:{}},before:[],applied:false}));
+  const history={...notebook,messages:[{role:'user',content:'Research this'},{role:'assistant',content:'Review actions',tool_pause:'approval',proposals}]};
+  let running=false;
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return history;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='apply_chat_proposal'){
+      assert.equal(running,false,'approved tools must run sequentially');running=true;
+      await new Promise(resolve=>setImmediate(resolve));
+      const proposal=proposals.find(p=>p.id===args.id);proposal.applied=true;proposal.arguments.result={content:[{type:'text',text:args.id}]};running=false;
+      return proposal.arguments.result;
+    }
+    if(command==='chat_notebook')return {messages:[...history.messages,{role:'user',content:args.message},{role:'assistant',content:'Continued'}],included_pages:2,total_pages:2};
+  });
+  await app.controller.open('Ideas');
+  assert.equal(app.element('nav-chat-count').textContent,'3');
+  assert.equal(app.element('chat-log').querySelector('.tool-group').open,false);
+  app.element('chat-review-actions').click();
+  assert.equal(app.element('chat-review').open,true);
+  assert.equal(app.element('chat-approve-selected').disabled,true,'nothing is approved by default');
+  const checks=app.element('chat-review-list').querySelectorAll('input');
+  for(const index of [0,2]){checks[index].checked=true;checks[index].dispatchEvent(new checks[index].ownerDocument.defaultView.Event('change'));}
+  app.element('chat-approve-selected').click();
+  assert.equal(app.element('chat-send').disabled,true);
+  app.element('chat-approve-selected').click();
+  for(let index=0;index<7;index++)await app.settle();
+  assert.deepEqual(calls.filter(([c])=>c==='apply_chat_proposal').map(([,args])=>args.id),['one','three']);
+  assert.equal(app.element('nav-chat-count').textContent,'1');
+  assert.equal(app.element('chat-send').disabled,false);
+  assert.match(app.element('chat-review-status').textContent,/2 actions completed/);
+  app.element('chat-review-close').click();
+  app.element('chat-input').value='Keep my next question';app.element('chat-continue').click();await app.settle();
+  assert.match(calls.find(([c])=>c==='chat_notebook')[1].message,/completed tool results/);
+  assert.equal(app.element('chat-input').value,'Keep my next question');
+});
+
+test('a failed external result stops a batch and cannot be run again',async()=>{
+  const calls=[];
+  const proposals=['one','two'].map(id=>({id,name:'mcp_call',arguments:{server:'research',tool:'search',input:{}},before:[],applied:false}));
+  const history={...notebook,messages:[{role:'assistant',content:'Review calls',proposals}]};
+  const app=chat(async(command,args)=>{
+    if(command==='get_notebook_chat')return history;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='apply_chat_proposal'){calls.push(args.id);const proposal=proposals.find(p=>p.id===args.id);proposal.applied=true;proposal.arguments.result={error:'Network interrupted',notice:'The remote action may have completed'};return proposal.arguments.result;}
+  });
+  await app.controller.open('Ideas');app.element('chat-review-actions').click();
+  const select=app.element('chat-select-all');select.checked=true;select.dispatchEvent(new select.ownerDocument.defaultView.Event('change'));
+  app.element('chat-approve-selected').click();await app.settle();await app.settle();
+  assert.deepEqual(calls,['one']);
+  assert.match(app.element('chat-review-status').textContent,/remaining actions were not run/);
+  assert.match(app.element('chat-review-list').textContent,/Needs attention/);
+  assert.equal(app.element('chat-review-list').querySelectorAll('input').length,1);
+  assert.equal(app.element('nav-chat-count').textContent,'1');
+});
+
+test('history and options controls are accessible without slash commands',async()=>{
+  const calls=[];
+  const app=chat(async(command,args)=>{calls.push(command);if(command==='get_notebook_chat')return notebook;if(command==='get_ai_connections')return [connection];if(command==='list_notebook_chats')return [{id:'old',title:'Earlier ideas',messages:2,updated_at:'2026-10-09'}];});
+  await app.controller.open('Ideas');
+  app.element('chat-options').click();assert.equal(app.element('chat-options-panel').open,true);
+  app.element('chat-input').value='My next thought';
+  app.element('chat-history').click();await app.settle();
+  assert.ok(calls.includes('list_notebook_chats'));
+  assert.match(app.element('chat-command-results').textContent,/Earlier ideas/);
+  assert.equal(app.element('chat-input').value,'My next thought');
 });
