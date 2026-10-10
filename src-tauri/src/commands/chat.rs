@@ -13,7 +13,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{ipc::Channel, AppHandle, Emitter};
 
 static CHAT_BUSY: AtomicBool = AtomicBool::new(false);
 struct ChatGuard;
@@ -34,6 +34,13 @@ pub(crate) struct ChatReply {
     pub messages: Vec<Message>,
     pub included_pages: usize,
     pub total_pages: usize,
+}
+#[derive(Clone, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub(crate) enum ChatStream {
+    Round { round: usize },
+    Text { delta: String },
+    Status { message: String },
 }
 
 #[tauri::command]
@@ -142,6 +149,7 @@ pub(crate) async fn chat_notebook(
     provider: String,
     message: String,
     editor: Option<ai::editor::EditorContext>,
+    on_stream: Channel<ChatStream>,
 ) -> Result<ChatReply, String> {
     if CHAT_BUSY.swap(true, Ordering::SeqCst) {
         return Err("A chat reply is already in progress".into());
@@ -185,19 +193,25 @@ pub(crate) async fn chat_notebook(
     definitions.extend(crate::mcp::definitions(&mcp_servers));
     ai::providers::attach_tools(&provider, &mut body, &definitions);
     let mut proposals = vec![];
-    let mut activity = vec![];
     let mut tool_results = vec![];
     let mut result_bytes = 0;
     let mut reply = String::new();
     let mut tool_pause = None;
     for round in 0..6 {
-        let data = match ai::exchange(&connection, &url, &body).await {
+        let mut partial = String::new();
+        let _ = on_stream.send(ChatStream::Round { round });
+        let response = ai::streaming::exchange(&connection, &url, &body, |delta| {
+            partial.push_str(delta);
+            let _ = on_stream.send(ChatStream::Text {
+                delta: delta.into(),
+            });
+        })
+        .await;
+        let data = match response {
             Ok(data) => data,
-            Err(error) if round > 0 => {
-                reply = format!(
-                    "{error}\n\nTool activity completed: {}. Review any proposed changes below.",
-                    activity.join(", ")
-                );
+            Err(error) if round > 0 || !partial.is_empty() => {
+                tool_pause = Some("interrupted".into());
+                reply = interrupted_reply(&partial, &error);
                 break;
             }
             Err(error) => return Err(error),
@@ -222,6 +236,9 @@ pub(crate) async fn chat_notebook(
             break;
         }
         let mut results = vec![];
+        let _ = on_stream.send(ChatStream::Status {
+            message: "Checking requested tools…".into(),
+        });
         for call in calls {
             let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
             let id = format!(
@@ -249,7 +266,6 @@ pub(crate) async fn chat_notebook(
                 }
                 Err(error) => json!({"error":error}),
             };
-            activity.push(call.name.clone());
             if result["status"] != "awaiting_user_review" {
                 let entry = json!({"tool":call.name,"result":result});
                 result_bytes += entry.to_string().len();
@@ -310,10 +326,26 @@ fn approval_reply(provider: &str, data: &Value, count: usize) -> String {
         format!("{text}\n\n{notice}")
     }
 }
+fn interrupted_reply(partial: &str, error: &str) -> String {
+    let notice = format!("Reply interrupted: {error}\n\nChoose Continue to keep working. Incomplete tool calls were not run.");
+    if partial.is_empty() {
+        notice
+    } else {
+        format!("{partial}\n\n{notice}")
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interrupted_stream_retains_text_with_clear_notice_and_continuation() {
+        let reply = interrupted_reply("Partial answer", "Connection lost");
+        assert!(reply.starts_with("Partial answer\n\nReply interrupted:"));
+        assert!(reply.contains("Choose Continue"));
+        assert!(reply.contains("Incomplete tool calls were not run"));
+        assert!(interrupted_reply("", "Connection lost").starts_with("Reply interrupted:"));
+    }
     #[test]
     fn tool_reply_pauses_for_review_without_requiring_another_provider_round() {
         let data =

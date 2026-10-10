@@ -8,7 +8,7 @@ import ts from 'typescript';
 function chat(invoke, editor) {
   const window = new JSDOM(readFileSync(new URL('../index.html', import.meta.url), 'utf8')).window;
   const notices = [];
-  const context = vm.createContext({document:window.document, HTMLButtonElement:window.HTMLButtonElement, invoke, setupMcp:()=>({refresh:async()=>{}}), renderMarkdown:body=>body, externalMarkdownUrl:()=>null, openUrl:async()=>{}});
+  const context = vm.createContext({window, document:window.document, Channel:class {}, HTMLButtonElement:window.HTMLButtonElement, invoke, setupMcp:()=>({refresh:async()=>{}}), renderMarkdown:body=>body, externalMarkdownUrl:()=>null, openUrl:async()=>{}});
   const commandsSource=readFileSync(new URL('../src/chat-commands.ts',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
   const compiledCommands=ts.transpileModule(commandsSource,{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.None}}).outputText;
   vm.runInContext(`globalThis.setupChatCommands = (() => {${compiledCommands}; globalThis.connectionId = connectionId; return setupChatCommands;})();`,context);
@@ -349,4 +349,57 @@ test('history and options controls are accessible without slash commands',async(
   assert.ok(calls.includes('list_notebook_chats'));
   assert.match(app.element('chat-command-results').textContent,/Earlier ideas/);
   assert.equal(app.element('chat-input').value,'My next thought');
+});
+
+test('streamed text renders before completion, follows rounds, and ignores late updates',async()=>{
+  let finish,onStream;
+  const response=new Promise(resolve=>{finish=resolve;});
+  const app=chat(async(command,args)=>{
+    if(command==='get_notebook_chat')return notebook;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='chat_notebook'){onStream=args.onStream;return response;}
+  });
+  await app.controller.open('Ideas');
+  app.element('chat-input').value='Hello';app.submit('chat-form');
+  assert.match(app.element('chat-log').textContent,/Hello/);
+  assert.equal(app.element('chat-log').getAttribute('aria-busy'),'true');
+  assert.equal(app.element('chat-log').querySelector('.streaming button'),null);
+  onStream.onmessage({event:'round',round:0});
+  onStream.onmessage({event:'text',delta:'First '});onStream.onmessage({event:'text',delta:'words'});
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal(app.element('chat-log').querySelector('.streaming .markdown-body').textContent,'First words');
+  assert.equal(app.element('chat-status').textContent,'Writing…');
+  onStream.onmessage({event:'status',message:'Checking requested tools…'});
+  assert.match(app.element('chat-status').textContent,/Checking/);
+  onStream.onmessage({event:'round',round:1});
+  assert.equal(app.element('chat-log').querySelector('.streaming .markdown-body').textContent,'');
+  onStream.onmessage({event:'text',delta:'Final reply'});
+  const log=app.element('chat-log');Object.defineProperty(log,'scrollHeight',{value:1000});Object.defineProperty(log,'clientHeight',{value:100});log.scrollTop=150;
+  await new Promise(resolve=>setTimeout(resolve,60));assert.equal(log.scrollTop,150,'streaming must not pull readers away from earlier messages');
+  finish({messages:[{role:'user',content:'Hello'},{role:'assistant',content:'Final reply'}],included_pages:2,total_pages:2});await app.settle();
+  assert.equal(log.scrollTop,150);
+  assert.equal(log.querySelectorAll('.chat-message').length,2);
+  assert.equal(log.querySelector('.streaming'),null);
+  assert.equal(log.getAttribute('aria-busy'),'false');
+  assert.equal(app.element('chat-input').value,'');
+  onStream.onmessage({event:'text',delta:'late data'});
+  await new Promise(resolve=>setTimeout(resolve,60));assert.doesNotMatch(log.textContent,/late data/);
+});
+
+test('failed streaming removes provisional reply and keeps the draft ready to retry',async()=>{
+  let fail,onStream;
+  const response=new Promise((resolve,reject)=>{fail=reject;});
+  const app=chat(async(command,args)=>{
+    if(command==='get_notebook_chat')return notebook;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='chat_notebook'){onStream=args.onStream;return response;}
+  });
+  await app.controller.open('Ideas');app.element('chat-input').value='Keep my question';app.submit('chat-form');
+  onStream.onmessage({event:'text',delta:'Unconfirmed text'});
+  fail(new Error('stream interrupted'));await app.settle();
+  await new Promise(resolve=>setTimeout(resolve,60));
+  assert.equal(app.element('chat-input').value,'Keep my question');
+  assert.equal(app.element('chat-send').disabled,false);
+  assert.doesNotMatch(app.element('chat-log').textContent,/Unconfirmed text/);
+  assert.ok(app.notices.some(n=>n.includes('stream interrupted')));
 });

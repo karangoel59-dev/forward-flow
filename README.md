@@ -13,10 +13,15 @@ whole point.
 npm install
 npm run tauri dev      # development
 npm run tauri build    # produces an .app bundle
+npm run icons          # regenerates platform icons from the editable SVG
 ```
 
 Rust must be on your PATH (`source "$HOME/.cargo/env"`, or add
 `~/.cargo/bin` to your shell profile).
+
+The [app icon source](src-tauri/icon-src/icon.svg) combines a notebook, a chat
+bubble, and an AI spark. Icon generation details are in
+[icon-src/README.md](src-tauri/icon-src/README.md).
 
 ## Keys
 
@@ -75,7 +80,7 @@ Purposes live in `.notebook.json` and sync with the vault. API keys and chat
 histories live in app settings outside the vault, never in Git. Keys are stored
 as local JSON with owner-only file permissions on Unix; they are not encrypted
 in a system keychain. Provider API usage requires your own account and quota.
-Replies arrive once generation finishes; this version does not stream tokens.
+Replies stream into chat as the provider generates them.
 
 Chat shares the main writing screen with the editor: beside it on desktop and
 below it on smaller screens. Selecting a notebook changes chat context while
@@ -144,6 +149,15 @@ run again from the same proposal. **Continue** sends a follow-up using the saved
 results. Chat pauses as soon as an action needs approval, rather than spending
 more provider rounds on the pending action. Read-only rounds retain their tool
 budget; **Continue** starts another step when that budget is reached.
+
+Replies stream into chat as text arrives from OpenAI, Azure OpenAI, Claude, or
+Gemini. Your message appears immediately, with progress for writing and tool
+checks. Streaming follows the reply while you are at the bottom; scrolling up
+lets you keep reading earlier messages. Tool calls are prepared only after a
+complete provider response and still require approval. Interrupted replies
+retain received text with an explicit notice and a **Continue** option;
+incomplete tool arguments are never executed. If no text arrived, the composer
+keeps your question ready to retry.
 
 ## Notebooks
 

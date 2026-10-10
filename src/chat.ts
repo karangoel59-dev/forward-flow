@@ -1,7 +1,7 @@
 import { setupChatActions, type Proposal, type EditorBridge } from "./chat-actions";
 import { setupChatCommands, connectionId } from "./chat-commands";
 import { setupMcp } from "./mcp";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { renderMarkdown, externalMarkdownUrl } from "./markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -9,6 +9,7 @@ type Message = { proposals?: Proposal[]; tool_pause?: string; role: "user" | "as
 type Connection = { id?: string; models?: string[]; provider: string; model: string; configured: boolean; endpoint?: string };
 type NotebookChat = { purpose: string; messages: Message[]; pages: number };
 type Reply = { messages: Message[]; included_pages: number; total_pages: number };
+type StreamEvent = { event: "round"; round: number } | { event: "text"; delta: string } | { event: "status"; message: string };
 const defaults: Record<string, string> = { azure_openai: "", openai: "gpt-4.1-mini", claude: "claude-sonnet-4-6", gemini: "gemini-3.8-flash" };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -34,6 +35,17 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   let purposeSaving = false;
   let version = 0;
   let opening = false;
+  let pending: { user: string; content: string } | null = null;
+  let streamBody: HTMLElement | null = null;
+  let streamTimer = 0;
+
+  function flushStream() {
+    streamTimer = 0;
+    if (!pending || !streamBody) return;
+    const follow = log.scrollHeight - log.scrollTop - log.clientHeight < 100;
+    streamBody.innerHTML = renderMarkdown(pending.content);
+    if (follow) log.scrollTop = log.scrollHeight;
+  }
 
   const actions = setupChatActions({
     notebook: () => notebook,
@@ -92,25 +104,29 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     settingsConnection.value=connections.some(c=>connectionId(c)===editing)?editing:"";
     updateModel(); commands.refresh(connections); return connections;
   }
-  function render() {
+  function render(scroll = true) {
     log.replaceChildren();
-    if (!messages.length) {
+    streamBody = null;
+    if (!messages.length && !pending) {
       const hint = document.createElement("p");
       hint.className = "hint";
       hint.textContent = "Explore an idea, ask about your pages, or ask for a new page. Your notebook purpose guides the conversation.";
       log.append(hint);
     }
-    messages.forEach(message => {
+    const visible = pending ? [...messages, { role: "user", content: pending.user }, { role: "assistant", content: pending.content }] : messages;
+    visible.forEach((message, index) => {
+      const streaming = Boolean(pending && index === visible.length - 1);
       const article = document.createElement("article");
-      article.className = `chat-message ${message.role}`;
+      article.className = `chat-message ${message.role}${streaming ? " streaming" : ""}`;
       const label = document.createElement("p");
       label.className = "eyebrow";
       label.textContent = message.role === "user" ? "YOU" : "WRITING PARTNER";
       const body = document.createElement("div");
       body.className = "markdown-body";
       body.innerHTML = renderMarkdown(message.content);
+      if (streaming) streamBody = body;
       article.append(label, body);
-      if (message.role === "assistant") {
+      if (message.role === "assistant" && !streaming) {
         const button = document.createElement("button");
         button.className = "text-button";
         button.textContent = "Save as page ↗";
@@ -122,7 +138,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         });
         article.append(button);
       }
-      const proposals = message.proposals || [];
+      const proposals = (message as Message).proposals || [];
       if (proposals.length) {
         const group = document.createElement("details");
         group.className = "tool-group";
@@ -144,7 +160,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     el<HTMLButtonElement>("chat-review-actions").hidden = !count;
     el<HTMLButtonElement>("chat-continue").hidden = !canContinue;
     el<HTMLButtonElement>("chat-continue").disabled = busy || saving;
-    log.scrollTop = log.scrollHeight;
+    if (scroll) log.scrollTop = log.scrollHeight;
   }
   function setBusy(value: boolean, status = "Thinking…") {
     busy = value;
@@ -175,18 +191,49 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       return;
     }
     const active = version;
+    let receiving = true;
+    const onStream = new Channel<StreamEvent>();
+    onStream.onmessage = event => {
+      if (!receiving || active !== version || !pending) return;
+      if (event.event === "round") {
+        pending.content = "";
+        window.clearTimeout(streamTimer); streamTimer = 0;
+        flushStream();
+        el<HTMLElement>("chat-status").textContent = event.round ? "Thinking with tool results…" : "Thinking…";
+      } else if (event.event === "text") {
+        pending.content += event.delta;
+        el<HTMLElement>("chat-status").textContent = "Writing…";
+        if (!streamTimer) streamTimer = window.setTimeout(flushStream, 40);
+      } else if (event.event === "status") {
+        el<HTMLElement>("chat-status").textContent = event.message;
+      }
+    };
     setBusy(true);
     try {
-      const reply = await invoke<Reply>("chat_notebook", { notebook, provider: provider.value, message: text, editor: editor?.snapshot() || null });
+      const snapshot = editor?.snapshot() || null;
+      pending = { user: text, content: "" };
+      log.setAttribute("aria-busy", "true");
+      render();
+      const reply = await invoke<Reply>("chat_notebook", { notebook, provider: provider.value, message: text, editor: snapshot, onStream });
       if (active !== version) return;
+      const follow = log.scrollHeight - log.scrollTop - log.clientHeight < 100;
+      const scrollTop = log.scrollTop;
+      pending = null;
       messages = reply.messages;
       if (!continuation) input.value = "";
-      render();
-      const latest = log.lastElementChild as HTMLElement | null;
-      if (latest) log.scrollTop = latest.offsetTop - log.offsetTop;
+      render(false);
+      log.scrollTop = follow ? log.scrollHeight : scrollTop;
       el<HTMLElement>("chat-context").textContent = `${reply.included_pages} of ${reply.total_pages} pages included${reply.included_pages < reply.total_pages ? " · some pages exceeded the context limit" : ""}`;
-    } catch (e) { if (active === version) notify(String(e)); }
-    finally { setBusy(false); }
+    } catch (e) {
+      if (active === version) { pending = null; render(); notify(String(e)); }
+    }
+    finally {
+      receiving = false;
+      window.clearTimeout(streamTimer); streamTimer = 0;
+      pending = null; streamBody = null;
+      log.setAttribute("aria-busy", "false");
+      setBusy(false);
+    }
   }
   el<HTMLElement>("chat-form").addEventListener("submit", e => { e.preventDefault(); send(); });
   input.addEventListener("keydown", e => {
