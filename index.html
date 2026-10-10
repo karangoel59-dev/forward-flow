@@ -29,12 +29,13 @@
         <div class="wordmark">forward flow<span class="brand-dot">.</span></div>
         <span class="eyebrow">A little further, every day.</span>
       </header>
-      <div id="writing-workspace" class="writing-workspace">
-      <section class="writing-pane" aria-label="Entry editor">
-      <div class="writing-label">
-        <span class="eyebrow">THE NEXT PAGE</span>
-        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button">+ New notebook</button><button id="write-chat" class="text-button" type="button" aria-expanded="true" aria-controls="chat">Chat ↗</button></div>
+      <div class="workspace-toolbar">
+        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button" aria-label="Create a notebook">+ New</button><button id="write-chat" class="text-button" type="button" aria-expanded="true" aria-controls="chat">Chat ↗</button></div>
+        <button id="write-save" class="ghost-btn" type="button">Save page <span aria-hidden="true">↗</span></button>
       </div>
+      <div id="writing-workspace" class="writing-workspace">
+      <section id="writing-pane" class="writing-pane" aria-label="Entry editor">
+      <div class="writing-label"><span class="eyebrow">THE NEXT PAGE</span></div>
       <textarea
         id="editor"
         aria-label="Write a new entry"
@@ -49,8 +50,8 @@
       </section>
     <aside id="chat" class="chat-panel" aria-label="Notebook chat">
       <div class="chat-inner">
-        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><button id="chat-close" class="text-button" type="button">Hide chat</button></div>
-        <details class="chat-settings"><summary>Purpose & connections</summary>
+        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><div class="chat-header-actions"><button id="chat-history" class="text-button" type="button">History</button><button id="chat-options" class="text-button" type="button" aria-expanded="false" aria-controls="chat-options-panel">Options</button><button id="chat-close" class="text-button" type="button">Hide chat</button></div></div>
+        <details id="chat-options-panel" class="chat-settings"><summary>Purpose & connections</summary>
         <details class="chat-details"><summary>Notebook purpose</summary><label for="chat-purpose" class="hint">Guide the tone, goals, and kind of pages you want to create.</label><textarea id="chat-purpose" rows="3" placeholder="Help me develop practical ideas for my next project."></textarea><button id="chat-purpose-save" class="text-button" type="button">Save purpose</button></details>
         <details id="ai-settings" class="chat-details"><summary>AI connections</summary>
           <form id="ai-form" class="ai-form"><label for="ai-connection">Saved connection</label><select id="ai-connection"><option value="">New connection</option></select><label for="ai-connection-name">Connection name</label><input id="ai-connection-name" maxlength="48" placeholder="Default provider name, or azure-voice" /><label for="ai-provider">Provider type</label><select id="ai-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><div id="ai-endpoint-field" class="ai-form" hidden><label for="ai-endpoint">Azure endpoint</label><input id="ai-endpoint" type="url" placeholder="https://your-resource.openai.azure.com" /></div><label id="ai-model-label" for="ai-model">Model ID</label><input id="ai-model" required /><label for="ai-saved-models">Saved models / deployments</label><textarea id="ai-saved-models" rows="3" placeholder="One model or deployment per line"></textarea><label for="ai-key">API key</label><input id="ai-key" type="password" autocomplete="off" /><p class="hint">Keys are stored in this device’s app settings and never synced. A connected provider receives your messages, notebook purpose, and pages when you send.</p><button id="ai-save" class="ghost-btn" type="submit">Save connection</button></form>
@@ -61,14 +62,19 @@
           <form id="mcp-form" class="ai-form"><label for="mcp-name">Server name</label><input id="mcp-name" required maxlength="24" placeholder="research" /><label for="mcp-url">MCP endpoint</label><input id="mcp-url" type="url" required placeholder="https://example.com/mcp" /><label for="mcp-token">Bearer token (optional)</label><input id="mcp-token" type="password" autocomplete="off" /><p class="hint">Server settings and tokens stay on this device, outside the synced vault. This connection uses an endpoint and optional token; OAuth sign-in and local command servers are not supported yet.</p><button id="mcp-connect" class="ghost-btn" type="submit">Connect & discover tools</button><p id="mcp-status" class="hint" role="status"></p></form>
         </details>
         </details>
-        <div class="notebook-controls"><label for="chat-provider" class="hint">Chat with</label><select id="chat-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button id="chat-reset" class="text-button" type="button">New conversation</button></div>
-        <p id="chat-model-current" class="hint"></p>
-        <p id="chat-context" class="hint"></p>
+        <div class="notebook-controls chat-connection-controls"><label for="chat-provider" class="hint">Chat with</label><select id="chat-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button id="chat-reset" class="text-button" type="button">New conversation</button></div>
+        <div class="chat-context-row"><p id="chat-model-current" class="hint"></p>
+        <p id="chat-context" class="hint"></p></div>
         <div id="chat-log" role="log" aria-label="Notebook conversation"></div>
         <p id="chat-status" class="hint" role="status" aria-live="polite"></p>
         <section id="chat-command-panel" class="chat-command-panel" aria-label="Chat command results" aria-live="polite" hidden>
           <div class="chat-command-head"><h2 id="chat-command-title"></h2><button id="chat-command-close" class="text-button" type="button" aria-label="Close command results">Close</button></div>
           <div id="chat-command-results"></div>
+        </section>
+        <section id="chat-action-bar" class="chat-action-bar" hidden aria-label="Tool actions">
+          <div><strong id="chat-action-count"></strong><p id="chat-action-hint" class="hint"></p></div>
+          <button id="chat-review-actions" class="ghost-btn" type="button">Review actions</button>
+          <button id="chat-continue" class="ghost-btn" type="button" hidden>Continue</button>
         </section>
         <form id="chat-form">
           <div id="chat-command-suggestions" class="chat-command-suggestions" role="listbox" aria-label="Chat commands" hidden></div>
@@ -216,6 +222,20 @@
     </section>
 
 
+    <nav id="workspace-nav" class="workspace-nav" aria-label="Workspace navigation">
+      <button id="nav-write" type="button" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5Z"/><path d="m14 5 5 5"/></svg><span>Write</span></button>
+      <button id="nav-chat" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 19 0Z"/></svg><span>Chat</span><span id="nav-chat-count" class="nav-badge" hidden></span></button>
+      <button id="nav-pages" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 3h14v18H5Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Pages</span></button>
+      <button id="nav-settings" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--paper)"/><circle cx="15" cy="12" r="2" fill="var(--paper)"/><circle cx="10" cy="18" r="2" fill="var(--paper)"/></svg><span>Settings</span></button>
+    </nav>
+    <dialog id="chat-review" class="action-review" aria-labelledby="chat-review-title">
+      <div class="action-review-head"><div><span class="eyebrow">YOUR APPROVAL</span><h2 id="chat-review-title">Review actions</h2></div><button id="chat-review-close" class="text-button" type="button">Close</button></div>
+      <p class="hint">Select the actions you want to approve. They run in order; each result is saved to this conversation.</p>
+      <div class="action-review-selection"><label><input id="chat-select-all" type="checkbox" /> Select all pending actions</label><span id="chat-selection-count" class="hint"></span></div>
+      <div id="chat-review-list"></div>
+      <p id="chat-review-status" class="hint" role="status" aria-live="polite"></p>
+      <div class="action-review-footer"><button id="chat-approve-selected" class="ghost-btn" type="button" disabled>Approve selected</button></div>
+    </dialog>
     <div id="hud" class="hint" role="status" aria-live="polite"></div>
   </body>
 </html>

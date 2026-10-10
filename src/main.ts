@@ -152,13 +152,41 @@ let editorToolBusy = false;
 editor.addEventListener("input", () => { editorRevision++; });
 let chatNotebook: string | null = null;
 let chatVisible = true;
-const chatController = setupChat(() => {
+let workspacePane: "write" | "chat" = "write";
+const compactLayout = window.matchMedia("(max-width: 900px)");
+function updateNavigation() {
+  const compact = compactLayout.matches;
+  el<HTMLElement>("writing-pane").hidden = compact && workspacePane === "chat";
+  el<HTMLElement>("chat").hidden = compact ? workspacePane !== "chat" : !chatVisible;
+  writeView.setAttribute("data-pane", workspacePane);
+  el<HTMLElement>("workspace-nav").hidden = !["write", "picker", "reader", "remote"].includes(mode);
+  for (const [id, active] of [["nav-write", mode === "write" && workspacePane === "write"], ["nav-chat", mode === "write" && workspacePane === "chat"], ["nav-pages", mode === "picker" || mode === "reader"], ["nav-settings", mode === "remote"]] as const) {
+    el<HTMLElement>(id).setAttribute("aria-current", active ? "page" : "false");
+  }
+}
+function updateViewport() {
+  const viewport = window.visualViewport;
+  if (viewport) {
+    writeView.style.setProperty("--viewport-height", `${viewport.height}px`);
+    document.documentElement.style.setProperty("--keyboard-offset", `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`);
+  }
+  updateNavigation();
+  scheduleFit(true);
+}
+function focusWriting() {
+  workspacePane = "write";
+  (document.activeElement as HTMLElement | null)?.blur();
+  show("write");
+}
+function closeChat() {
   chatVisible = false;
-  el<HTMLElement>("chat").hidden = true;
+  workspacePane = "write";
   el<HTMLElement>("writing-workspace").classList.add("chat-hidden");
   el<HTMLButtonElement>("write-chat").setAttribute("aria-expanded", "false");
+  updateNavigation();
   scheduleFit(true);
-}, message => hud(message, 5000), {
+}
+const chatController = setupChat(closeChat, message => hud(message, 5000), {
   snapshot: () => ({content: editor.value, notebook: writeNotebook.value, revision: editorRevision}),
   lock: () => {
     if (committing || editorToolBusy) return false;
@@ -185,11 +213,11 @@ async function openNotebookChat(notebook: string) {
   chatNotebook = notebook;
   writeNotebook.value = notebook;
   chatVisible = true;
-  el<HTMLElement>("chat").hidden = false;
+  workspacePane = "chat";
   el<HTMLElement>("writing-workspace").classList.remove("chat-hidden");
   el<HTMLButtonElement>("write-chat").setAttribute("aria-expanded", "true");
   show("write");
-  el<HTMLTextAreaElement>("chat-input").focus();
+  if (!compactLayout.matches) el<HTMLTextAreaElement>("chat-input").focus();
 }
 const win = getCurrentWindow();
 
@@ -333,12 +361,12 @@ function show(next: Mode) {
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
   notebookView.hidden = next !== "notebook";
-  el<HTMLElement>("chat").hidden = !chatVisible;
+  updateNavigation();
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
   if (next === "write") {
     void syncWritingChat();
-    editor.focus();
+    if (!compactLayout.matches && workspacePane === "write") editor.focus();
     updateLiveCount();
     scheduleFit(true);
   } else if (next === "picker") {
@@ -1012,6 +1040,11 @@ readerBody.addEventListener("click", (event) => {
 
 writeNotebook.addEventListener("change", () => { void syncWritingChat(); });
 el<HTMLButtonElement>("write-chat").addEventListener("click", () => openNotebookChat(writeNotebook.value));
+el<HTMLButtonElement>("nav-write").addEventListener("click", focusWriting);
+el<HTMLButtonElement>("nav-chat").addEventListener("click", () => openNotebookChat(writeNotebook.value));
+el<HTMLButtonElement>("nav-pages").addEventListener("click", () => { linkFor = null; void openPicker(); });
+el<HTMLButtonElement>("nav-settings").addEventListener("click", openRemote);
+el<HTMLButtonElement>("write-save").addEventListener("click", commit);
 el<HTMLButtonElement>("picker-chat").addEventListener("click", () => openNotebookChat(pickerNotebook.value));
 
 el<HTMLButtonElement>("write-new-notebook").addEventListener("click", beginNotebook);
@@ -1054,12 +1087,15 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-window.addEventListener("resize", () => scheduleFit(true));
+window.addEventListener("resize", updateViewport);
+window.visualViewport?.addEventListener("resize", updateViewport);
+window.visualViewport?.addEventListener("scroll", updateViewport);
+compactLayout.addEventListener?.("change", updateNavigation);
 
 // Preserve touch-button clicks when returning focus to the editor.
 document.addEventListener("mousedown", (e) => {
   const target = e.target as HTMLElement | null;
-  if (mode === "write" && target !== editor && !target?.closest("button, input, select, label, textarea, .touchbar, #chat")) {
+  if (mode === "write" && workspacePane === "write" && target !== editor && !target?.closest("button, input, select, label, textarea, .touchbar, #chat")) {
     e.preventDefault();
     editor.focus();
   }

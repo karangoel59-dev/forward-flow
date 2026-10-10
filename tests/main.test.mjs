@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function frontend(invoke, chatOpen = async () => true) {
+function frontend(invoke, chatOpen = async () => true, compact = false) {
   const elements = new Map();
   const timers = new Map();
   let nextTimer = 0;
@@ -36,7 +36,7 @@ function frontend(invoke, chatOpen = async () => true) {
     document,
     navigator: { maxTouchPoints: 0 },
     window: {
-      matchMedia: () => ({ matches: false }),
+      matchMedia: query => ({ matches: compact && query === "(max-width: 900px)" }),
       addEventListener() {},
       setTimeout(callback) { timers.set(++nextTimer, callback); return nextTimer; },
     },
@@ -226,4 +226,22 @@ test('rejected chat notebook switch restores editor notebook selection', async (
   assert.equal(await app.run('syncWritingChat()'), false);
   assert.equal(app.element('write-notebook').value, 'Ideas');
   assert.equal(app.run('chatNotebook'), 'Ideas');
+});
+
+test('mobile navigation shows one workspace and keeps editor and conversation when switching',async()=>{
+  const opened=[];
+  const app=frontend(async()=>null,async notebook=>{opened.push(notebook);return true;},true);
+  app.editor.value='My unsaved draft';
+  app.run('show("write")');
+  assert.equal(app.element('chat').hidden,true);
+  assert.equal(app.element('writing-pane').hidden,false);
+  await app.run('openNotebookChat("Ideas")');
+  assert.equal(app.element('chat').hidden,false);
+  assert.equal(app.element('writing-pane').hidden,true);
+  app.run('focusWriting()');
+  assert.equal(app.element('chat').hidden,true);
+  assert.equal(app.element('writing-pane').hidden,false);
+  assert.equal(app.editor.value,'My unsaved draft');
+  await app.run('openNotebookChat("Ideas")');
+  assert.deepEqual(opened,['','Ideas'],'reopening the same chat must preserve its state');
 });

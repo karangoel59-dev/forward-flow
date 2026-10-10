@@ -10,7 +10,7 @@ test('MCP settings connect, list discovered tools, clear tokens, and toggle serv
   const context=vm.createContext({document:window.document,invoke:async(command,args)=>{
     calls.push([command,args]);
     if(command==='list_mcp_servers')return servers;
-    if(command==='connect_mcp_server'){servers=[{...args.server,authenticated:true,tools:[{name:'search',description:'Find documents'}]}];return servers[0];}
+    if(command==='connect_mcp_server'){servers=[{...args.server,authenticated:true,tool_discovery:true,tools:[{name:'search',description:'Find documents'}]}];return servers[0];}
     if(command==='enable_mcp_server')servers[0].enabled=args.enabled;
     if(command==='remove_mcp_server')servers=[];
   }});
@@ -22,8 +22,10 @@ test('MCP settings connect, list discovered tools, clear tokens, and toggle serv
   el('mcp-form').dispatchEvent(new window.Event('submit',{cancelable:true}));await new Promise(resolve=>setImmediate(resolve));
   assert.equal(calls.find(([c])=>c==='connect_mcp_server')[1].server.token,'private');assert.equal(el('mcp-token').value,'');
   assert.match(el('mcp-list').textContent,/search/);
+  assert.match(el('mcp-list').textContent,/All tools available to chat through tool discovery/);
   [...el('mcp-list').querySelectorAll('button')].find(b=>b.textContent==='Disable').click();await new Promise(resolve=>setImmediate(resolve));
   assert.equal(servers[0].enabled,false);
+  assert.match(el('mcp-list').textContent,/Disabled for chat/);
   [...el('mcp-list').querySelectorAll('button')].find(b=>b.textContent==='Disconnect').click();await new Promise(resolve=>setImmediate(resolve));
   assert.equal(servers.length,0);
 });

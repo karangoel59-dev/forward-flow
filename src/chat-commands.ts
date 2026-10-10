@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type ChatConnection = { id?: string; provider: string; model: string; models?: string[]; configured: boolean; endpoint?: string };
 type Session = { id: string; title: string; updated_at: string; provider?: string; model?: string; messages: number; active: boolean };
-type Server = { id: string; url: string; enabled: boolean; tools: unknown[] };
+type Server = { id: string; url: string; enabled: boolean; tool_discovery?: boolean; tools: unknown[] };
 type ModelList = { models: string[]; note: string };
 type Row = { label: string; detail?: string; run?: () => Promise<void> };
 type Dependencies = {
@@ -139,7 +139,7 @@ export function setupChatCommands(deps: Dependencies) {
       await deps.refreshMcp(); show("MCP updated",`${args[1]} ${args[0]}d.`); return;
     }
     if (args.length && (!["list", "show"].includes(args[0]) || args.length !== 1)) throw new Error("Use /mcp, /mcp reconnect <server>, or /mcp enable|disable <server>.");
-    show("MCP servers", servers.length ? "Saved servers and discovered tools. Select a server to reconnect and refresh its tools." : "No MCP servers saved. Add one under Purpose & connections.", servers.map(server => ({label:server.id,detail:`${server.enabled ? "Enabled" : "Disabled"} · ${server.tools.length} tools · ${server.url}`,run:async () => {await reconnect(server.id);show("MCP reconnected",`${server.id} tools refreshed.`);}})));
+    show("MCP servers", servers.length ? "Saved servers and discovered tools. Select a server to reconnect and refresh its tools." : "No MCP servers saved. Add one under Purpose & connections.", servers.map(server => ({label:server.id,detail:`${server.enabled ? "Enabled" : "Disabled"} · ${server.tools.length} tools${server.enabled && server.tools.length ? (server.tool_discovery ? " · Available through discovery" : " · Available to chat") : ""} · ${server.url}`,run:async () => {await reconnect(server.id);show("MCP reconnected",`${server.id} tools refreshed.`);}})));
   }
   async function resume(args: string[]) {
     const sessions = await invoke<Session[]>("list_notebook_chats", {notebook:deps.notebook()});

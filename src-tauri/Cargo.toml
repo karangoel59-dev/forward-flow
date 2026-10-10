@@ -1,6 +1,6 @@
 [package]
 name = "forward-flow"
-version = "0.4.0"
+version = "0.4.1"
 description = "Append-only zen writing"
 authors = ["Karan Goel"]
 edition = "2021"
