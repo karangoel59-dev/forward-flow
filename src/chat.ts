@@ -31,6 +31,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   const log = el<HTMLElement>("chat-log");
   const page = el<HTMLTextAreaElement>("chat-page");
   let notebook = "";
+  let savedPurpose = "";
   let connections: Connection[] = [];
   let messages: Message[] = [];
   let busy = false;
@@ -106,7 +107,13 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     notebook: () => notebook,
     unavailable: () => busy || saving || opening || purposeSaving,
     running: value => { saving = value; setBusy(value, "Running approved actions…"); if (!value) render(); },
-    refreshHistory: async () => { const data = await invoke<NotebookChat>("get_notebook_chat", {notebook}); messages = data.messages; render(); },
+    refreshHistory: async () => {
+      const data = await invoke<NotebookChat>("get_notebook_chat", {notebook});
+      messages = data.messages;
+      if (purpose.value === savedPurpose) purpose.value = data.purpose;
+      savedPurpose = data.purpose;
+      render();
+    },
     notify,
     editor,
   });
@@ -122,7 +129,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     refreshMcp: () => mcp.refresh(),
   });
   function adopt(data: NotebookChat) {
-    messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
+    messages = data.messages; purpose.value = data.purpose; savedPurpose = data.purpose; version++; actions.reset();
     el<HTMLElement>("chat-page-panel").hidden = true;
     el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
     render();
@@ -336,7 +343,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   el<HTMLButtonElement>("chat-purpose-save").addEventListener("click", async () => {
     if (purposeSaving || busy || saving || opening) return;
     purposeSaving = true;
-    try { await invoke("set_notebook_purpose", { notebook, purpose: purpose.value }); notify("Notebook purpose saved."); }
+    try { await invoke("set_notebook_purpose", { notebook, purpose: purpose.value }); savedPurpose = purpose.value; notify("Notebook purpose saved."); }
     catch (e) { notify(String(e)); }
     finally { purposeSaving = false; }
   });
@@ -383,7 +390,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         version++;
         el<HTMLElement>("chat-title").textContent = selected || "Inbox";
         el<HTMLElement>("chat-page-panel").hidden = true;
-        purpose.value = data.purpose;
+        purpose.value = data.purpose; savedPurpose = data.purpose;
         messages = data.messages;
         el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
         await mcp.refresh().catch(e => notify(String(e)));

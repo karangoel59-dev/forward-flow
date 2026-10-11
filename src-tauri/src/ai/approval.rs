@@ -9,6 +9,7 @@ const PAGES: &[&str] = &[
     "link_entries",
     "unlink_entries",
     "create_notebook",
+    "update_notebook_metadata",
     "move_entry",
     "sync_vault",
 ];
@@ -58,7 +59,7 @@ mod tests {
     fn nothing_is_auto_approved_until_a_category_is_switched_on() {
         let off = AutoApprove::default();
         assert!(off.tools().is_empty());
-        for tool in ["create_entry", "delete_entry", "replace_editor", "mcp_call"] {
+        for tool in ["create_entry", "delete_entry", "replace_editor", "mcp_call", "update_notebook_metadata"] {
             assert!(!off.allows(tool));
         }
         let missing: AutoApprove = serde_json::from_str("{}").unwrap();
@@ -68,6 +69,8 @@ mod tests {
     #[test]
     fn each_switch_covers_only_its_own_actions() {
         let pages = AutoApprove { pages: true, ..Default::default() };
+        assert!(pages.allows("update_notebook_metadata"));
+        assert!(!pages.allows("read_notebook_metadata"));
         assert!(pages.allows("create_entry") && pages.allows("set_tags") && pages.allows("sync_vault"));
         assert!(!pages.allows("delete_entry"), "deleting needs its own switch");
         assert!(!pages.allows("clear_editor") && !pages.allows("mcp_call"));
@@ -84,7 +87,7 @@ mod tests {
     fn every_tool_that_proposes_a_change_belongs_to_exactly_one_switch() {
         let everything = AutoApprove { pages: true, editor: true, deletions: true, external: true };
         let known = everything.tools();
-        let read_only = ["list_entries", "search_entries", "read_entry", "git_status", "git_history", "read_editor"];
+        let read_only = ["read_notebook_metadata", "list_entries", "search_entries", "read_entry", "git_status", "git_history", "read_editor"];
         for definition in crate::ai::tools::definitions().into_iter().chain(crate::ai::editor::definitions()) {
             let name = definition["name"].as_str().unwrap().to_owned();
             assert_ne!(read_only.contains(&name.as_str()), known.contains(&name.as_str()), "{name}");

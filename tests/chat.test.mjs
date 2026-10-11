@@ -536,3 +536,70 @@ test('auto-approve switches save immediately and a failed save is not left showi
   assert.equal(app.element('auto-deletions').checked,false);
   assert.match(app.element('auto-approve-status').textContent,/Cannot save settings/);
 });
+
+test('notebook metadata shows source and values, requires review, and refreshes purpose',async()=>{
+  const calls=[];
+  const p={id:'metadata',name:'update_notebook_metadata',arguments:{purpose:'New purpose',metadata:{audience:'<img src=x onerror=alert(1)>',obsolete:null}},before:[['Ideas/.notebook.json','{"purpose":"Explore ideas","unknown":{"keep":true}}']],applied:false};
+  let current={...notebook,messages:[{role:'assistant',content:'Review metadata',proposals:[p]}]};
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return current;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='get_auto_approve')return {pages:false,editor:false,deletions:false,external:false,tools:[]};
+    if(command==='apply_chat_proposal'){
+      assert.equal(args.notebook,'Ideas');assert.equal(args.id,'metadata');assert.equal(args.auto,undefined);
+      p.applied=true;current={...current,purpose:'New purpose'};return {metadata_updated:true};
+    }
+  });
+  await app.controller.open('Ideas');await app.settle();
+  assert.equal(calls.some(([c])=>c==='apply_chat_proposal'),false);
+  assert.match(app.element('chat-log').textContent,/Update notebook metadata/);
+  assert.match(app.element('chat-log').textContent,/Original notebook metadata/);
+  assert.match(app.element('chat-log').textContent,/unknown/);
+  assert.equal(app.element('chat-log').querySelector('img'),null);
+  app.element('chat-review-actions').click();
+  const box=app.element('chat-review-list').querySelector('input');box.checked=true;box.dispatchEvent(new box.ownerDocument.defaultView.Event('change'));
+  app.element('chat-approve-selected').click();await app.settle();await app.settle();
+  assert.equal(calls.filter(([c])=>c==='apply_chat_proposal').length,1);
+  assert.equal(app.element('chat-purpose').value,'New purpose');
+});
+
+test('notebook metadata auto-approval uses only the server advertised preference',async()=>{
+  const metadata={id:'metadata',name:'update_notebook_metadata',arguments:{purpose:'New'},before:[['Ideas/.notebook.json','']],applied:false};
+  const off=autoChat(pagesOn,[{proposals:[metadata]}]);
+  await off.app.controller.open('Ideas');await off.app.settle();await off.ask('Update purpose');
+  assert.equal(off.count('apply_chat_proposal'),0,'no inferred approval from pages boolean');
+  const on=autoChat({...pagesOn,tools:[...pagesOn.tools,'update_notebook_metadata']},[{proposals:[metadata]},{content:'Updated'}]);
+  await on.app.controller.open('Ideas');await on.app.settle();await on.ask('Update purpose');
+  assert.equal(on.count('apply_chat_proposal'),1);
+  assert.equal(on.calls.find(([c])=>c==='apply_chat_proposal')[1].auto,true);
+});
+
+test('metadata approval failure stays pending and does not replace unsaved purpose',async()=>{
+  const p={id:'metadata',name:'update_notebook_metadata',arguments:{purpose:'New'},before:[['.notebook.json','']],applied:false};
+  const app=chat(async(command)=>{
+    if(command==='get_notebook_chat')return {...notebook,messages:[{role:'assistant',content:'Review',proposals:[p]}]};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='apply_chat_proposal')throw new Error('Notebook metadata changed since this proposal. Ask for a new proposal.');
+  });
+  await app.controller.open('');
+  app.element('chat-purpose').value='Unsaved purpose';
+  app.element('chat-log').querySelector('.tool-apply').click();await app.settle();
+  assert.equal(p.applied,false);
+  assert.equal(app.element('chat-purpose').value,'Unsaved purpose');
+  assert.ok(app.notices.some(n=>/changed since this proposal/.test(n)));
+  assert.match(app.element('chat-log').textContent,/Inbox/);
+});
+
+test('successful metadata approval preserves a purpose being edited locally',async()=>{
+  const p={id:'metadata',name:'update_notebook_metadata',arguments:{purpose:'Applied purpose'},before:[['Ideas/.notebook.json','']],applied:false};
+  let current={...notebook,messages:[{role:'assistant',content:'Review',proposals:[p]}]};
+  const app=chat(async(command)=>{
+    if(command==='get_notebook_chat')return current;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='apply_chat_proposal'){p.applied=true;current={...current,purpose:'Applied purpose'};return {metadata_updated:true};}
+  });
+  await app.controller.open('Ideas');app.element('chat-purpose').value='My unsaved edit';
+  app.element('chat-log').querySelector('.tool-apply').click();await app.settle();await app.settle();
+  assert.equal(p.applied,true);assert.equal(app.element('chat-purpose').value,'My unsaved edit');
+});

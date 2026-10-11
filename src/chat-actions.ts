@@ -13,6 +13,7 @@ type Options = {
 };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const labels: Record<string, string> = {
+  update_notebook_metadata: "Update notebook metadata",
   create_entry: "Create page", revise_entry: "Revise page", delete_entry: "Delete page",
   move_entry: "Move page", create_notebook: "Create notebook", set_tags: "Update tags",
   link_entries: "Link pages", unlink_entries: "Unlink pages", sync_vault: "Sync notebook",
@@ -23,6 +24,7 @@ function title(proposal: Proposal) {
 }
 function summary(proposal: Proposal) {
   const args = proposal.arguments;
+  if (proposal.name === "update_notebook_metadata") return proposal.before[0]?.[0].replace(/\/?\.notebook\.json$/, "") || "Inbox";
   if (proposal.name === "mcp_call") return `${args.server} · external call`;
   if (proposal.name.endsWith("_editor")) return `Current draft · ${(args.editor as EditorContext)?.notebook || "Inbox"}`;
   return String(args.filename || args.name || args.notebook || (typeof args.content === "string" ? `${args.content.length.toLocaleString()} characters` : "Notebook change"));
@@ -65,7 +67,7 @@ export function setupChatActions(options: Options) {
     if (proposal.before.length) {
       const before = document.createElement("details");
       const label = document.createElement("summary");
-      label.textContent = proposal.name.endsWith("_editor") ? "Original editor draft" : "Original page contents";
+      label.textContent = proposal.name.endsWith("_editor") ? "Original editor draft" : proposal.name === "update_notebook_metadata" ? "Original notebook metadata (empty means no file)" : "Original page contents";
       before.append(label);
       for (const [filename, content] of proposal.before) {
         const source = document.createElement("pre"); source.textContent = `${filename}\n${content}`; before.append(source);
