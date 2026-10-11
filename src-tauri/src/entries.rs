@@ -21,6 +21,12 @@ pub(crate) struct EntryFull {
 }
 
 #[derive(Serialize)]
+pub(crate) struct SearchHit {
+    pub(crate) path: String,
+    pub(crate) snippet: String,
+}
+
+#[derive(Serialize)]
 pub(crate) struct TagCount {
     pub(crate) tag: String,
     pub(crate) count: usize,
@@ -155,7 +161,17 @@ pub(crate) fn rewrite_meta(
     links: Option<Vec<String>>,
 ) -> Result<EntryMeta, String> {
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let (fm, body) = split_frontmatter(&raw);
+    let out = rewrite_meta_text(&raw, tags, links);
+    fs::write(path, &out).map_err(|e| e.to_string())?;
+    Ok(meta_from(path, &out))
+}
+
+pub(crate) fn rewrite_meta_text(
+    raw: &str,
+    tags: Option<Vec<String>>,
+    links: Option<Vec<String>>,
+) -> String {
+    let (fm, body) = split_frontmatter(raw);
     let existing = fm.unwrap_or_default();
 
     let mut lines: Vec<String> = Vec::new();
@@ -193,9 +209,54 @@ pub(crate) fn rewrite_meta(
     }
 
     lines.retain(|l| !l.trim().is_empty());
-    let out = format!("---\n{}\n---\n\n{}", lines.join("\n"), body);
-    fs::write(path, &out).map_err(|e| e.to_string())?;
-    Ok(meta_from(path, &out))
+    format!("---\n{}\n---\n\n{}", lines.join("\n"), body)
+}
+
+/// Finds entries whose prose contains `query`, ignoring case, with a snippet around the match.
+pub(crate) fn search_bodies(dir: &PathBuf, query: &str) -> Vec<SearchHit> {
+    let query = query.trim().to_lowercase();
+    let mut hits = Vec::new();
+    if query.is_empty() {
+        return hits;
+    }
+    for entry in collect_entries(dir) {
+        if hits.len() >= 500 {
+            break;
+        }
+        let Ok(raw) = fs::read_to_string(&entry.path) else {
+            continue;
+        };
+        let (_, body) = split_frontmatter(&raw);
+        let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
+        let lower = flat.to_lowercase();
+        let Some(at) = lower.find(&query) else {
+            continue;
+        };
+        // Lowercasing can change byte lengths; only trust the offset when it still lines up.
+        let at = if lower.len() == flat.len() && flat.is_char_boundary(at) {
+            at
+        } else {
+            0
+        };
+        let mut start = at.saturating_sub(60);
+        while !flat.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = (at + query.len() + 100).min(flat.len());
+        while !flat.is_char_boundary(end) {
+            end += 1;
+        }
+        hits.push(SearchHit {
+            path: entry.path,
+            snippet: format!(
+                "{}{}{}",
+                if start > 0 { "…" } else { "" },
+                &flat[start..end],
+                if end < flat.len() { "…" } else { "" }
+            ),
+        });
+    }
+    hits
 }
 
 pub(crate) fn next_entry_path(root: &PathBuf, entry_dir: &PathBuf, stamp: &str) -> PathBuf {

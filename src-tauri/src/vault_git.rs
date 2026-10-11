@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::thread;
 use tauri::{AppHandle, Emitter, Runtime};
 
+mod conflicts;
 mod shell;
 // Compile on desktop too so Android code and tests are checked locally.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -15,6 +16,8 @@ mod libgit2_backend;
 use shell as backend;
 #[cfg(target_os = "android")]
 use libgit2_backend as backend;
+
+pub use conflicts::{Choice, Conflicts};
 
 // Keep a tag-branch update after its corresponding commit, including rapid saves.
 static RECORD: Mutex<()> = Mutex::new(());
@@ -53,6 +56,23 @@ fn emit<R: Runtime>(app: &AppHandle<R>, state: &'static str, detail: String) {
     let _ = app.emit("sync-status", StatusEvent { state, detail });
 }
 
+/// Reports a failed sync, as a reviewable conflict when that is what stopped it.
+fn report_failure<R: Runtime>(app: &AppHandle<R>, dir: &std::path::Path, detail: String) {
+    let count = backend::locked(|| conflicts::list(dir))
+        .map(|found| found.files.len())
+        .unwrap_or(0);
+    if count > 0 {
+        emit(app, "conflict", count.to_string());
+    } else {
+        emit(app, "error", detail);
+    }
+}
+
+/// A background success is not announced, but it does clear any earlier conflict notice.
+fn report_synced<R: Runtime>(app: &AppHandle<R>, announce: bool) {
+    emit(app, if announce { "synced" } else { "quiet" }, String::new());
+}
+
 /// Pushes in a background thread. Requests that arrive while a push is running are merged into
 /// one follow-up push, so a burst of saves does not queue a push each.
 fn request_push<R: Runtime>(app: AppHandle<R>, dir: PathBuf, announce: bool) {
@@ -76,10 +96,10 @@ fn request_push<R: Runtime>(app: AppHandle<R>, dir: PathBuf, announce: bool) {
 
         for dir in dirs {
             match backend::push(&dir) {
-                SyncOutcome::Synced if announce => emit(&app, "synced", String::new()),
+                SyncOutcome::Synced => report_synced(&app, announce),
                 SyncOutcome::Offline(detail) => emit(&app, "offline", detail),
-                SyncOutcome::Failed(detail) => emit(&app, "error", detail),
-                _ => {}
+                SyncOutcome::Failed(detail) => report_failure(&app, &dir, detail),
+                SyncOutcome::NoRemote => {}
             }
         }
 
@@ -132,20 +152,48 @@ pub fn set_remote<R: Runtime>(app: &AppHandle<R>, dir: PathBuf, url: String) -> 
 pub fn sync_vault<R: Runtime>(app: &AppHandle<R>, dir: &std::path::Path, announce: bool) -> Result<bool, String> {
     backend::ensure_repo(dir)?;
     let updated = backend::pull_and_merge(dir).map_err(|detail| {
-        emit(app, "error", detail.clone());
+        report_failure(app, dir, detail.clone());
         detail
     })?;
     let outcome = backend::push(dir);
     match outcome {
-        SyncOutcome::Synced if announce => emit(app, "synced", String::new()),
+        SyncOutcome::Synced => report_synced(app, announce),
         SyncOutcome::Offline(detail) => emit(app, "offline", detail),
-        SyncOutcome::Failed(detail) => emit(app, "error", detail),
-        _ => {}
+        SyncOutcome::Failed(detail) => report_failure(app, dir, detail),
+        SyncOutcome::NoRemote => {}
     }
     if updated {
         let _ = app.emit("vault-updated", ());
     }
     Ok(updated)
+}
+
+/// Commits pending work, fetches, and lists files that differ on both this device and the remote.
+pub fn find_conflicts(dir: &std::path::Path) -> Result<Conflicts, String> {
+    backend::ensure_repo(dir)?;
+    backend::commit_all(dir, "Sync vault")?;
+    backend::fetch(dir)?;
+    backend::locked(|| conflicts::list(dir))
+}
+
+/// Applies the user's choices as a merge commit, then pushes it.
+pub fn resolve_conflicts<R: Runtime>(
+    app: &AppHandle<R>,
+    dir: PathBuf,
+    local: &str,
+    remote: &str,
+    choices: &[Choice],
+) -> Result<(), String> {
+    backend::ensure_repo(&dir)?;
+    backend::commit_all(&dir, "Sync vault")?;
+    backend::locked(|| {
+        // Same order as a background merge: repository lock first, then entry writes.
+        let _write = crate::state::VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        conflicts::resolve(&dir, local, remote, choices)
+    })?;
+    let _ = app.emit("vault-updated", ());
+    request_push(app.clone(), dir, true);
+    Ok(())
 }
 
 /// Triggers an immediate sync in a background thread.
@@ -265,6 +313,50 @@ mod tests {
         wait_until("push queue idle", || !PUSH.lock().unwrap().running);
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::remove_dir_all(&remote).unwrap();
+    }
+
+    #[test]
+    fn a_conflicting_sync_asks_for_review_and_the_resolution_reaches_the_remote() {
+        let _turn = BACKGROUND.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, remote) = published_vault("conflict-sync");
+        write(&dir, "a.md", "---\ncreated: x\ntags: []\nlinks: []\n---\n\nbody\n");
+        backend::commit_all(&dir, "Add entry a").unwrap();
+        assert_eq!(backend::push(&dir), SyncOutcome::Synced);
+
+        let other = fresh("conflict-sync-other");
+        std::fs::remove_dir_all(&other).unwrap();
+        git(&std::env::temp_dir(), &["clone", "--quiet", remote.to_str().unwrap(), other.to_str().unwrap()]).unwrap();
+        backend::ensure_repo(&other).unwrap();
+        write(&other, "a.md", "---\ncreated: x\ntags: [theirs]\nlinks: []\n---\n\nbody\n");
+        backend::commit_all(&other, "Tag a elsewhere").unwrap();
+        assert_eq!(backend::push(&other), SyncOutcome::Synced);
+        write(&dir, "a.md", "---\ncreated: x\ntags: [mine]\nlinks: []\n---\n\nbody\n");
+        backend::commit_all(&dir, "Tag a here").unwrap();
+
+        let app = tauri::test::mock_app();
+        let (tx, rx) = mpsc::channel();
+        app.handle().listen("sync-status", move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+        assert!(sync_vault(app.handle(), &dir, true).is_err());
+        let status = rx.recv_timeout(Duration::from_secs(20)).expect("no status event");
+        assert!(status.contains("conflict") && status.contains('1'), "got: {}", status);
+        assert_eq!(std::fs::read_to_string(dir.join("a.md")).unwrap().matches("mine").count(), 1);
+
+        let found = find_conflicts(&dir).unwrap();
+        assert_eq!(found.files.len(), 1);
+        let choices = [Choice { path: "a.md".into(), keep: "both".into() }];
+        resolve_conflicts(app.handle(), dir.clone(), &found.local, &found.remote, &choices).unwrap();
+        wait_until("the resolution to be announced", || {
+            rx.try_iter().any(|status| status.contains("synced"))
+        });
+        assert_eq!(log(&remote)[0], "Resolve sync conflict");
+        assert!(std::fs::read_to_string(dir.join("a.md")).unwrap().contains("tags: [mine, theirs]"));
+        assert!(find_conflicts(&dir).unwrap().files.is_empty());
+        wait_until("push queue idle", || !PUSH.lock().unwrap().running);
+        for path in [&dir, &remote, &other] {
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
 
     #[test]

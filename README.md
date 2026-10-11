@@ -49,7 +49,9 @@ Inside an open entry:
 | `x` | Unlink the selected related entry |
 
 In the viewer's filter box, a query starting with `#` matches tags only;
-anything else matches date, prose and tags together.
+anything else matches date, tags and the full text of every entry. Dates, tags
+and opening lines narrow as you type; matches deeper in an entry follow a moment
+later and show the surrounding words.
 
 ## Markdown
 
@@ -68,13 +70,21 @@ model list. You can switch connections and models between turns.
 
 When you send a message, the app sends the notebook purpose, conversation, and
 pages directly in that notebook to the chosen provider. It includes up to 60 KB
-of page text, newest first, skipping pages that do not fit. The response shows
-how many pages were included. Child notebooks have separate context.
+of page text. A notebook that fits is sent whole. A larger one sends the newest
+pages (a quarter of the space) plus the pages that share the most words, tags
+or dates with your question and the one before it, and fills any room left with
+newer pages. Matching is by words, not meaning, and happens on your device. The
+model is told how many pages it did not receive and can search and read them
+with notebook tools. Pages are never cut short; one that does not fit is left
+out. The response shows how many pages were included. Child notebooks have
+separate context.
 
 Replies render as Markdown. **Save as page** opens an editable review; **Save
 page** then creates a new immutable Markdown entry in the same notebook. Your
 writing draft is preserved. Chat history persists on this device; **New
 conversation** starts another chat and keeps earlier conversations for `/resume`.
+**History** lists them; **Delete**, then **Delete forever?**, permanently removes
+one from this device. Deleting the open conversation starts a new one.
 
 Purposes live in `.notebook.json` and sync with the vault. API keys and chat
 histories live in app settings outside the vault, never in Git. Keys are stored
@@ -103,6 +113,38 @@ most six provider rounds with eight tool calls per round. Git history shows
 vault commit summaries. Shell access and arbitrary Git operations require an
 external MCP server exposing those tools. Markdown tables work; chart rendering
 is not included yet.
+
+### Auto-approve actions
+
+By default every proposed change waits for **Apply change**. Under **Purpose &
+connections → Auto-approve actions** you can let chosen kinds of action run as
+soon as the model proposes them. Everything is off until you switch it on:
+
+| Switch | Covers | Can it be undone? |
+| --- | --- | --- |
+| Page changes | New pages and revisions, tags, links, notebooks, moves, sync | Yes, from the vault's Git history |
+| Draft changes | Replacing, clearing or saving the unsaved draft | A replaced or cleared draft is gone |
+| Deleting pages | Page deletions | Only from Git history, outside the app |
+| External MCP tools | Calls to connected MCP servers | No |
+
+While any switch is on, the chat shows **Auto-approving …** above the
+conversation. Auto-approved actions are labelled **Completed · auto-approved**
+and their arguments and results stay in the conversation.
+
+- Only actions in the newest reply run automatically. Older pending actions
+  stay pending.
+- Actions run in the order proposed and stop at the first one that is not
+  covered or that fails; the rest wait for you.
+- When all of a reply's actions complete, the chat continues by itself. After
+  five automatic steps for one message it pauses until you choose **Continue**.
+- The switches are checked again when each action is applied, and stale
+  proposals are still rejected if a page or the draft changed.
+
+Text inside your pages, and results returned by external tools, can steer the
+model into proposing actions you did not ask for. With a switch on, those
+actions run unseen, so enable only what you would accept without review. The
+setting is stored on this device and is never exported or imported with a
+portable setup config.
 
 ### External MCP servers
 
@@ -183,6 +225,22 @@ scope works as the password. Without a remote, entries just stay local.
 - **Window Focus Sync**: Returning to or focusing the app immediately triggers a sync check so entries written on other devices surface right away.
 - **Manual Re-sync**: Hit `⌘R` (or tap the "sync" button on touch, or "Sync now" in the remote screen) to immediately pull, merge, and push.
 - **Live Updating**: When new commits arrive from another device, the viewer and open entries automatically refresh without needing an app restart.
+
+### When two devices change the same page
+
+Entry prose never changes, but tags, links and notebook purposes can be edited on
+two devices before they sync. When that happens sync pauses for those files and a
+notice appears: **N pages changed on two devices · Review**. The review shows both
+versions side by side and asks for one choice per file:
+
+- **Keep this device** or **Keep other device** uses that version.
+- **Keep both** combines tags and links when the prose is identical. For anything
+  else it keeps this device's file and saves the other as `name-other-device`.
+- If one device deleted the file, choose between keeping it and deleting it.
+
+Nothing changes until you choose **Keep my choices and sync**. Changes to other
+files merge as usual, and the result is pushed as a `Resolve sync conflict`
+commit. **Not now** leaves everything as it is; the notice stays until resolved.
 
 On Android there is no folder picker, so the vault lives in the app's own
 private storage automatically — setting a remote there is how entries leave

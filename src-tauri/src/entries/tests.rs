@@ -217,3 +217,29 @@ fn reciprocal_links_are_cleaned_up_on_entry_removal() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn search_finds_text_beyond_the_preview_and_ignores_frontmatter() {
+    let dir = std::env::temp_dir().join(format!("ff-search-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("Ideas")).unwrap();
+    let long = format!("{} the Heron landed quietly. {}", "filler ".repeat(60), "tail ".repeat(60));
+    fs::write(
+        dir.join("Ideas/a.md"),
+        format!("---\ncreated: x\ntags: [rivers]\nlinks: []\n---\n\n{long}\n"),
+    )
+    .unwrap();
+    fs::write(dir.join("b.md"), "---\ntags: [heron]\n---\n\nÜber étude\n").unwrap();
+
+    let hits = search_bodies(&dir, "  heron LANDED ");
+    assert_eq!(hits.len(), 1, "tags in frontmatter are not prose");
+    assert!(hits[0].path.ends_with("a.md"));
+    assert!(hits[0].snippet.contains("the Heron landed quietly"));
+    assert!(hits[0].snippet.starts_with('…') && hits[0].snippet.ends_with('…'));
+    assert!(hits[0].snippet.len() < 400);
+
+    assert_eq!(search_bodies(&dir, "ÉTUDE").len(), 1);
+    assert!(search_bodies(&dir, "missing").is_empty());
+    assert!(search_bodies(&dir, "   ").is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}

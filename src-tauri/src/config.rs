@@ -12,6 +12,8 @@ pub(crate) struct Config {
     pub(crate) git: GitSettings,
     pub(crate) models: BTreeMap<String, Connection>,
     pub(crate) mcp_servers: BTreeMap<String, Server>,
+    /// A choice for this device only; it is never part of a portable config.
+    pub(crate) auto_approve: crate::ai::approval::AutoApprove,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -21,6 +23,7 @@ impl Default for Config {
             git: GitSettings::default(),
             models: BTreeMap::new(),
             mcp_servers: BTreeMap::new(),
+            auto_approve: Default::default(),
         }
     }
 }

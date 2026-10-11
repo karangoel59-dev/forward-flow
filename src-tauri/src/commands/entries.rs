@@ -3,7 +3,8 @@ use crate::{
     drafts::draft_path,
     entries::{
         add_link, clean_tag, collect_entries, dedupe, meta_from, next_entry_path, related_to,
-        remove_link, rewrite_meta, split_frontmatter, stem_of, EntryFull, EntryMeta, TagCount,
+        remove_link, rewrite_meta, search_bodies, split_frontmatter, stem_of, EntryFull, EntryMeta,
+        SearchHit, TagCount,
     },
     notebooks::notebook_dir,
     state::VAULT_WRITES,
@@ -28,6 +29,14 @@ pub(super) fn entry_in_vault(app: &AppHandle, path: &str) -> Result<PathBuf, Str
 #[tauri::command]
 pub(crate) fn list_entries(app: AppHandle) -> Result<Vec<EntryMeta>, String> {
     Ok(collect_entries(&vault_dir(&app)?))
+}
+
+#[tauri::command]
+pub(crate) fn search_entries(app: AppHandle, query: String) -> Result<Vec<SearchHit>, String> {
+    if query.len() > 200 {
+        return Err("Search text is too long".into());
+    }
+    Ok(search_bodies(&vault_dir(&app)?, &query))
 }
 
 #[tauri::command]

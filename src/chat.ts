@@ -9,6 +9,9 @@ type Message = { proposals?: Proposal[]; tool_pause?: string; role: "user" | "as
 type Connection = { id?: string; models?: string[]; provider: string; model: string; configured: boolean; endpoint?: string };
 type NotebookChat = { purpose: string; messages: Message[]; pages: number };
 type Reply = { messages: Message[]; included_pages: number; total_pages: number };
+type AutoApprove = { pages: boolean; editor: boolean; deletions: boolean; external: boolean; tools: string[] };
+/** Automatic follow-ups allowed per message before the user must choose Continue. */
+const AUTO_STEPS = 5;
 type StreamEvent = { event: "round"; round: number } | { event: "text"; delta: string } | { event: "status"; message: string };
 const defaults: Record<string, string> = { azure_openai: "", openai: "gpt-4.1-mini", claude: "claude-sonnet-4-6", gemini: "gemini-3.8-flash" };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -38,6 +41,58 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   let pending: { user: string; content: string } | null = null;
   let streamBody: HTMLElement | null = null;
   let streamTimer = 0;
+  let autoTools: string[] = [];
+  let autoSteps = 0;
+  let autoSaving = false;
+  const autoBoxes = [...document.querySelectorAll<HTMLInputElement>("#auto-approve-settings input[data-auto]")];
+
+  function showAutoApprove(status?: AutoApprove | null) {
+    autoTools = status?.tools ?? [];
+    const on: string[] = [];
+    for (const box of autoBoxes) {
+      box.checked = Boolean(status?.[box.dataset.auto as "pages"]);
+      if (box.checked) on.push(box.parentElement?.querySelector("span")?.firstChild?.textContent?.toLowerCase() || "");
+    }
+    const badge = el<HTMLElement>("chat-auto-status");
+    badge.hidden = !on.length;
+    badge.textContent = on.length ? `Auto-approving ${on.join(", ")}` : "";
+  }
+  async function loadAutoApprove() {
+    try { showAutoApprove(await invoke<AutoApprove>("get_auto_approve")); }
+    catch { showAutoApprove(null); }
+  }
+  for (const box of autoBoxes) {
+    box.addEventListener("change", async () => {
+      const note = el<HTMLElement>("auto-approve-status");
+      if (autoSaving) { box.checked = !box.checked; return; }
+      autoSaving = true;
+      const settings = Object.fromEntries(autoBoxes.map(b => [b.dataset.auto, b.checked]));
+      try {
+        showAutoApprove(await invoke<AutoApprove>("set_auto_approve", {settings}));
+        note.textContent = autoTools.length ? "Saved. These actions now run without review." : "Saved. Every action waits for your approval.";
+      } catch (e) {
+        // Never leave a switch showing on when the choice was not saved.
+        box.checked = !box.checked; note.textContent = String(e);
+        await loadAutoApprove();
+      } finally { autoSaving = false; }
+    });
+  }
+  /** Runs the newest reply's leading actions that the switches cover, then continues the chat. */
+  async function autoApprove() {
+    if (!autoTools.length) return;
+    const latest = messages[messages.length - 1];
+    const waiting = (latest?.role === "assistant" ? latest.proposals || [] : []).filter(p => !p.applied);
+    // Actions run in order, so stop at the first one that still needs the user.
+    const stop = waiting.findIndex(p => !autoTools.includes(p.name));
+    const eligible = stop < 0 ? waiting : waiting.slice(0, stop);
+    if (!eligible.length) return;
+    const started = version;
+    if (!await actions.run(eligible, true) || started !== version) return;
+    if (eligible.length < waiting.length) return;
+    if (autoSteps >= AUTO_STEPS) { notify(`Auto-approval paused after ${AUTO_STEPS} steps. Choose Continue to keep going.`); return; }
+    autoSteps++;
+    await send(true, true);
+  }
 
   function flushStream() {
     streamTimer = 0;
@@ -61,16 +116,17 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     connections: async () => { await loadConnections(); return connections; },
     unavailable: () => busy || saving || opening || purposeSaving,
     busy: setBusy,
-    resume: async id => {
-      const data = await invoke<NotebookChat>("resume_notebook_chat", {notebook, id});
-      messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
-      el<HTMLElement>("chat-page-panel").hidden = true;
-      el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
-      render();
-    },
+    resume: async id => adopt(await invoke<NotebookChat>("resume_notebook_chat", {notebook, id})),
+    remove: async id => adopt(await invoke<NotebookChat>("delete_notebook_chat", {notebook, id})),
     newChat: startNewChat,
     refreshMcp: () => mcp.refresh(),
   });
+  function adopt(data: NotebookChat) {
+    messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
+    el<HTMLElement>("chat-page-panel").hidden = true;
+    el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
+    render();
+  }
   async function startNewChat() {
     await invoke("clear_notebook_chat", {notebook});
     messages = []; version++; actions.reset();
@@ -174,7 +230,9 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     el<HTMLButtonElement>("chat-options").disabled = value;
     el<HTMLElement>("chat-status").textContent = value ? status : "";
   }
-  async function send(continuation = false) {
+  async function send(continuation = false, automatic = false) {
+    if (!automatic) autoSteps = 0;
+    let replied = false;
     const text = continuation ? "Continue my previous request using the completed tool results. Do not repeat completed actions; leave any unapproved actions pending." : input.value.trim();
     if (busy || saving || opening || purposeSaving || !text) return;
     if (text.startsWith("/") && await commands.run(text)) return;
@@ -223,7 +281,8 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       if (!continuation) input.value = "";
       render(false);
       log.scrollTop = follow ? log.scrollHeight : scrollTop;
-      el<HTMLElement>("chat-context").textContent = `${reply.included_pages} of ${reply.total_pages} pages included${reply.included_pages < reply.total_pages ? " · some pages exceeded the context limit" : ""}`;
+      el<HTMLElement>("chat-context").textContent = `${reply.included_pages} of ${reply.total_pages} pages included${reply.included_pages < reply.total_pages ? " · chosen by relevance to your question" : ""}`;
+      replied = true;
     } catch (e) {
       if (active === version) { pending = null; render(); notify(String(e)); }
     }
@@ -234,6 +293,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       log.setAttribute("aria-busy", "false");
       setBusy(false);
     }
+    if (replied && active === version) await autoApprove();
   }
   el<HTMLElement>("chat-form").addEventListener("submit", e => { e.preventDefault(); send(); });
   input.addEventListener("keydown", e => {
@@ -315,6 +375,8 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       try {
         const data = await invoke<NotebookChat>("get_notebook_chat", { notebook: selected });
         await loadConnections();
+        // Not awaited: a slow settings read must never hold up opening the chat.
+        void loadAutoApprove();
         notebook = selected;
         actions.reset();
         commands.clear();

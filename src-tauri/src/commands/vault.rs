@@ -74,3 +74,27 @@ pub(crate) fn resync_vault(app: AppHandle) -> Result<(), String> {
     vault_git::sync_now(&app, dir, true);
     Ok(())
 }
+
+#[tauri::command]
+pub(crate) async fn get_conflicts(app: AppHandle) -> Result<vault_git::Conflicts, String> {
+    let dir = vault_dir(&app)?;
+    // Fetching can be slow; keep it off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || vault_git::find_conflicts(&dir))
+        .await
+        .map_err(|_| "Cannot check for sync conflicts")?
+}
+
+#[tauri::command]
+pub(crate) async fn resolve_conflicts(
+    app: AppHandle,
+    local: String,
+    remote: String,
+    choices: Vec<vault_git::Choice>,
+) -> Result<(), String> {
+    let dir = vault_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        vault_git::resolve_conflicts(&app, dir, &local, &remote, &choices)
+    })
+    .await
+    .map_err(|_| "Cannot resolve sync conflicts")?
+}

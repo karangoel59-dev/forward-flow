@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager};
 
+pub(crate) mod approval;
+pub(crate) mod context;
 pub(crate) mod editor;
 pub(crate) mod history;
 pub(crate) mod models;
