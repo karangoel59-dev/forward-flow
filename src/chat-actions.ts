@@ -90,7 +90,7 @@ export function setupChatActions(options: Options) {
     const hint = document.createElement("span"); hint.className = "hint"; hint.textContent = summary(proposal);
     text.append(name, hint); label.append(text);
     const state = document.createElement("span"); state.className = "tool-state";
-    state.textContent = failed(proposal) ? "Needs attention" : proposal.applied ? "Completed" : "Needs approval";
+    state.textContent = failed(proposal) ? "Needs attention" : proposal.applied ? (proposal.arguments.auto_approved ? "Completed · auto-approved" : "Completed") : "Needs approval";
     header.append(label, state); section.append(header, details(proposal));
     if (!selectable || proposal.applied) {
       const apply = document.createElement("button"); apply.type = "button"; apply.className = "text-button tool-apply";
@@ -119,10 +119,12 @@ export function setupChatActions(options: Options) {
     renderReview();
     return count;
   }
-  async function run(items: Proposal[]) {
-    if (running || options.unavailable()) return;
+  /** Applies proposals in order, stopping at the first failure. Resolves true when all completed. */
+  async function run(items: Proposal[], auto = false) {
+    if (running || options.unavailable()) return false;
     const queue = items.filter(p => !p.applied);
-    if (!queue.length) return;
+    if (!queue.length) return false;
+    let succeeded = false;
     running = true; options.running(true); renderReview();
     el<HTMLButtonElement>("chat-review-close").disabled = true;
     let completed = 0;
@@ -132,7 +134,7 @@ export function setupChatActions(options: Options) {
         const editorTool = proposal.name.endsWith("_editor");
         if (editorTool && (!options.editor || !options.editor.lock())) throw new Error("Finish saving the editor first.");
         try {
-          const result = await invoke<Record<string, unknown>>("apply_chat_proposal", { notebook: options.notebook(), id: proposal.id, editor: editorTool ? options.editor?.snapshot() : null });
+          const result = await invoke<Record<string, unknown>>("apply_chat_proposal", { notebook: options.notebook(), id: proposal.id, editor: editorTool ? options.editor?.snapshot() : null, ...(auto ? { auto: true } : {}) });
           proposal.applied = true; proposal.arguments.result = result; selected.delete(proposal.id);
           if (editorTool && typeof result.editor_content === "string") await options.editor!.replace(result.editor_content);
           completed++;
@@ -140,7 +142,10 @@ export function setupChatActions(options: Options) {
           if (result.error || result.isError) throw new Error(`${title(proposal)} reported an error. Review its result before continuing.`);
         } finally { if (editorTool) options.editor?.unlock(); }
       }
-      status.textContent = `${completed} ${completed === 1 ? "action" : "actions"} completed. Continue the conversation to use the results.`;
+      succeeded = true;
+      status.textContent = auto
+        ? `Auto-approved ${completed} ${completed === 1 ? "action" : "actions"}: ${queue.map(title).join(", ")}.`
+        : `${completed} ${completed === 1 ? "action" : "actions"} completed. Continue the conversation to use the results.`;
       options.notify(status.textContent);
     } catch (error) {
       status.textContent = `${String(error)} Stopped; remaining actions were not run.`;
@@ -151,15 +156,17 @@ export function setupChatActions(options: Options) {
         for (const proposal of queue) { proposal.applied = true; selected.delete(proposal.id); }
         status.textContent = "Could not refresh action status. Reopen the conversation before retrying.";
         options.notify(status.textContent);
+        succeeded = false;
       }
       running = false; options.running(false); renderReview();
       el<HTMLButtonElement>("chat-review-close").disabled = false;
     }
+    return succeeded;
   }
   el<HTMLButtonElement>("chat-review-actions").addEventListener("click", () => { status.textContent = ""; renderReview(); dialog.showModal(); });
   el<HTMLButtonElement>("chat-review-close").addEventListener("click", () => { if (!running) dialog.close(); });
   dialog.addEventListener("cancel", event => { if (running) event.preventDefault(); });
   selectAll.addEventListener("change", () => { for (const p of pending()) { if (selectAll.checked) selected.add(p.id); else selected.delete(p.id); } renderReview(); });
   approve.addEventListener("click", () => void run(pending().filter(p => selected.has(p.id))));
-  return { card, refresh, reset: () => { selected.clear(); status.textContent = ""; dialog.close(); } };
+  return { card, refresh, run, reset: () => { selected.clear(); status.textContent = ""; dialog.close(); } };
 }

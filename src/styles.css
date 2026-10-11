@@ -355,3 +355,7 @@ button.chat-command-row:hover { background: color-mix(in srgb, var(--accent) 7%,
 @media (max-width: 700px) {
   .conflict-versions { grid-template-columns: minmax(0, 1fr); }
 }
+.auto-approve-options { display: grid; gap: 0.35rem; margin: 0.6rem 0; font: 0.8rem/1.5 var(--sans); }
+.auto-approve-options label { display: flex; align-items: flex-start; gap: 0.5rem; min-height: 44px; padding: 0.4rem 0; }
+.auto-approve-options input { margin-top: 0.25rem; flex-shrink: 0; }
+.chat-auto-status { color: var(--accent); }

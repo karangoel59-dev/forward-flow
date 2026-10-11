@@ -114,6 +114,38 @@ vault commit summaries. Shell access and arbitrary Git operations require an
 external MCP server exposing those tools. Markdown tables work; chart rendering
 is not included yet.
 
+### Auto-approve actions
+
+By default every proposed change waits for **Apply change**. Under **Purpose &
+connections → Auto-approve actions** you can let chosen kinds of action run as
+soon as the model proposes them. Everything is off until you switch it on:
+
+| Switch | Covers | Can it be undone? |
+| --- | --- | --- |
+| Page changes | New pages and revisions, tags, links, notebooks, moves, sync | Yes, from the vault's Git history |
+| Draft changes | Replacing, clearing or saving the unsaved draft | A replaced or cleared draft is gone |
+| Deleting pages | Page deletions | Only from Git history, outside the app |
+| External MCP tools | Calls to connected MCP servers | No |
+
+While any switch is on, the chat shows **Auto-approving …** above the
+conversation. Auto-approved actions are labelled **Completed · auto-approved**
+and their arguments and results stay in the conversation.
+
+- Only actions in the newest reply run automatically. Older pending actions
+  stay pending.
+- Actions run in the order proposed and stop at the first one that is not
+  covered or that fails; the rest wait for you.
+- When all of a reply's actions complete, the chat continues by itself. After
+  five automatic steps for one message it pauses until you choose **Continue**.
+- The switches are checked again when each action is applied, and stale
+  proposals are still rejected if a page or the draft changed.
+
+Text inside your pages, and results returned by external tools, can steer the
+model into proposing actions you did not ask for. With a switch on, those
+actions run unseen, so enable only what you would accept without review. The
+setting is stored on this device and is never exported or imported with a
+portable setup config.
+
 ### External MCP servers
 
 Open **External MCP tools** in notebook chat. Enter a server name, its

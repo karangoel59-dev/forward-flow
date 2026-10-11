@@ -428,3 +428,111 @@ test('history deletes a conversation only after a second press and reloads the o
   assert.doesNotMatch(app.element('chat-log').textContent,/Old answer/);
   assert.equal(calls.some(([c])=>c==='resume_notebook_chat'||c==='chat_notebook'),false);
 });
+
+const proposal=(id,name,extra={})=>({id,name,arguments:{filename:'a.md',...extra},before:[],applied:false});
+function autoChat(policy,replies,applied=()=>({ok:true})){
+  const calls=[];
+  let messages=[];
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return {...notebook,messages};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='get_auto_approve')return policy;
+    if(command==='chat_notebook'){
+      const next=replies.shift()||{content:'Done.'};
+      messages=[...messages,{role:'user',content:args.message},{role:'assistant',content:next.content||'Proposed.',proposals:next.proposals||[],tool_pause:next.proposals?'approval':undefined}];
+      return {messages,included_pages:2,total_pages:2};
+    }
+    if(command==='apply_chat_proposal'){
+      const result=applied(args);
+      messages=messages.map(m=>({...m,proposals:(m.proposals||[]).map(p=>p.id===args.id?{...p,applied:true,arguments:{...p.arguments,result,auto_approved:args.auto===true}}:p)}));
+      return result;
+    }
+  });
+  const count=name=>calls.filter(([c])=>c===name).length;
+  return {app,calls,count,async ask(text){app.element('chat-input').value=text;app.submit('chat-form');for(let i=0;i<30;i++)await app.settle();}};
+}
+const pagesOn={pages:true,editor:false,deletions:false,external:false,tools:['create_entry','revise_entry','set_tags','link_entries','unlink_entries','create_notebook','move_entry','sync_vault']};
+
+test('with auto-approve off every proposal waits, exactly as before',async()=>{
+  const t=autoChat({pages:false,editor:false,deletions:false,external:false,tools:[]},[{proposals:[proposal('one','create_entry')]}]);
+  await t.app.controller.open('Ideas');await t.app.settle();
+  await t.ask('Make a page');
+  assert.equal(t.count('apply_chat_proposal'),0);
+  assert.equal(t.count('chat_notebook'),1);
+  assert.equal(t.app.element('chat-auto-status').hidden,true);
+  assert.equal(t.app.element('chat-review-actions').hidden,false);
+});
+
+test('covered actions run on their own, are marked, and the chat continues with the results',async()=>{
+  const t=autoChat(pagesOn,[{proposals:[proposal('one','create_entry'),proposal('two','set_tags')]},{content:'Both are done.'}]);
+  await t.app.controller.open('Ideas');await t.app.settle();
+  assert.match(t.app.element('chat-auto-status').textContent,/Auto-approving page changes/);
+  assert.equal(t.app.element('auto-pages').checked,true);
+  await t.ask('Make a page and tag it');
+  const applied=t.calls.filter(([c])=>c==='apply_chat_proposal').map(([,a])=>[a.id,a.auto]);
+  assert.equal(JSON.stringify(applied),JSON.stringify([['one',true],['two',true]]));
+  assert.equal(t.count('chat_notebook'),2);
+  assert.match(t.calls.filter(([c])=>c==='chat_notebook')[1][1].message,/Continue my previous request/);
+  assert.match(t.app.element('chat-log').textContent,/Both are done\./);
+  assert.match(t.app.element('chat-log').textContent,/Completed · auto-approved/);
+  assert.ok(t.app.notices.some(n=>/Auto-approved 2 actions: Create page, Update tags/.test(n)));
+  assert.equal(t.app.element('chat-input').value,'');
+});
+
+test('auto-approval stops at the first action that needs the user and never continues past it',async()=>{
+  const t=autoChat(pagesOn,[{proposals:[proposal('one','create_entry'),proposal('gone','delete_entry'),proposal('three','set_tags')]}]);
+  await t.app.controller.open('Ideas');await t.app.settle();
+  await t.ask('Tidy up');
+  assert.equal(JSON.stringify(t.calls.filter(([c])=>c==='apply_chat_proposal').map(([,a])=>a.id)),'["one"]');
+  assert.equal(t.count('chat_notebook'),1);
+  assert.match(t.app.element('chat-action-count').textContent,/2 actions need approval/);
+
+  const external=autoChat(pagesOn,[{proposals:[{...proposal('call','mcp_call'),arguments:{server:'research',tool:'send',input:{}}}]}]);
+  await external.app.controller.open('Ideas');await external.app.settle();
+  await external.ask('Send it');
+  assert.equal(external.count('apply_chat_proposal'),0);
+});
+
+test('a failed auto-approved action stops the run and leaves the rest for review',async()=>{
+  const t=autoChat(pagesOn,[{proposals:[proposal('one','create_entry'),proposal('two','set_tags')]}],()=>{throw new Error('This action needs your approval');});
+  await t.app.controller.open('Ideas');await t.app.settle();
+  await t.ask('Make a page');
+  assert.equal(t.count('apply_chat_proposal'),1);
+  assert.equal(t.count('chat_notebook'),1);
+  assert.ok(t.app.notices.some(n=>/needs your approval.*Stopped/.test(n)));
+});
+
+test('a model that keeps proposing is paused after five automatic steps, and a new message resets the count',async()=>{
+  let n=0;
+  const endless=Array.from({length:20},()=>({proposals:[proposal(`p${n++}`,'create_entry')]}));
+  const t=autoChat(pagesOn,endless);
+  await t.app.controller.open('Ideas');await t.app.settle();
+  await t.ask('Keep going');
+  assert.equal(t.count('chat_notebook'),6,'the message plus five automatic continuations');
+  assert.equal(t.count('apply_chat_proposal'),6);
+  assert.ok(t.app.notices.some(n=>/Auto-approval paused after 5 steps/.test(n)));
+  t.app.element('chat-continue').click();for(let i=0;i<30;i++)await t.app.settle();
+  assert.equal(t.count('chat_notebook'),12,'choosing Continue allows five more');
+});
+
+test('auto-approve switches save immediately and a failed save is not left showing on',async()=>{
+  const calls=[];let fail=false;
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return notebook;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='get_auto_approve')return {pages:false,editor:false,deletions:false,external:false,tools:[]};
+    if(command==='set_auto_approve'){if(fail)throw new Error('Cannot save settings');return {...args.settings,tools:args.settings.external?['mcp_call']:[]};}
+  });
+  await app.controller.open('Ideas');await app.settle();
+  const toggle=(id,on)=>{const box=app.element(id);box.checked=on;box.dispatchEvent(new (box.ownerDocument.defaultView.Event)('change'));};
+  toggle('auto-external',true);await app.settle();
+  assert.equal(JSON.stringify(calls.find(([c])=>c==='set_auto_approve')[1].settings),JSON.stringify({pages:false,editor:false,deletions:false,external:true}));
+  assert.match(app.element('chat-auto-status').textContent,/external mcp tools/);
+  assert.match(app.element('auto-approve-status').textContent,/run without review/);
+  fail=true;
+  toggle('auto-deletions',true);await app.settle();await app.settle();
+  assert.equal(app.element('auto-deletions').checked,false);
+  assert.match(app.element('auto-approve-status').textContent,/Cannot save settings/);
+});

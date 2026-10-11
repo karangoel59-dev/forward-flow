@@ -62,10 +62,20 @@
           <div id="mcp-list"></div>
           <form id="mcp-form" class="ai-form"><label for="mcp-name">Server name</label><input id="mcp-name" required maxlength="24" placeholder="research" /><label for="mcp-url">MCP endpoint</label><input id="mcp-url" type="url" required placeholder="https://example.com/mcp" /><label for="mcp-token">Bearer token (optional)</label><input id="mcp-token" type="password" autocomplete="off" /><p class="hint">Server settings and tokens stay on this device, outside the synced vault. This connection uses an endpoint and optional token; OAuth sign-in and local command servers are not supported yet.</p><button id="mcp-connect" class="ghost-btn" type="submit">Connect & discover tools</button><p id="mcp-status" class="hint" role="status"></p></form>
         </details>
+        <details id="auto-approve-settings" class="chat-details"><summary>Auto-approve actions</summary>
+          <p class="hint">Chosen actions run as soon as the model proposes them, without waiting for your review. Words inside your pages or tool results can steer the model, so switch on only what you would accept unseen. Applies on this device.</p>
+          <div class="auto-approve-options">
+            <label><input id="auto-pages" type="checkbox" data-auto="pages" /> <span>Page changes<span class="hint"> — new pages and revisions, tags, links, notebooks, moves and sync. Kept in your vault’s Git history.</span></span></label>
+            <label><input id="auto-editor" type="checkbox" data-auto="editor" /> <span>Draft changes<span class="hint"> — replace, clear or save your unsaved draft. A replaced or cleared draft cannot be brought back.</span></span></label>
+            <label><input id="auto-deletions" type="checkbox" data-auto="deletions" /> <span>Deleting pages<span class="hint"> — recoverable only from Git history, outside the app.</span></span></label>
+            <label><input id="auto-external" type="checkbox" data-auto="external" /> <span>External MCP tools<span class="hint"> — calls leave this device and may act on other services. They cannot be undone here.</span></span></label>
+          </div>
+          <p id="auto-approve-status" class="hint" role="status" aria-live="polite"></p>
+        </details>
         </details>
         <div class="notebook-controls chat-connection-controls"><label for="chat-provider" class="hint">Chat with</label><select id="chat-provider"><option value="openai">OpenAI</option><option value="azure_openai">Azure OpenAI</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button id="chat-reset" class="text-button" type="button">New conversation</button></div>
         <div class="chat-context-row"><p id="chat-model-current" class="hint"></p>
-        <p id="chat-context" class="hint"></p></div>
+        <p id="chat-context" class="hint"></p><p id="chat-auto-status" class="hint chat-auto-status" hidden></p></div>
         <div id="chat-log" role="log" aria-label="Notebook conversation"></div>
         <p id="chat-status" class="hint" role="status" aria-live="polite"></p>
         <section id="chat-command-panel" class="chat-command-panel" aria-label="Chat command results" aria-live="polite" hidden>

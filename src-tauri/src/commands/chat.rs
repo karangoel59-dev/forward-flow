@@ -431,11 +431,14 @@ pub(crate) async fn apply_chat_proposal(
     notebook: String,
     id: String,
     editor: Option<ai::editor::EditorContext>,
+    auto: Option<bool>,
 ) -> Result<Value, String> {
     if CHAT_BUSY.swap(true, Ordering::SeqCst) {
         return Err("Wait for the current chat reply".into());
     }
     let _guard = ChatGuard;
+    let auto = auto.unwrap_or(false);
+    let policy = crate::config::settings(&app)?.auto_approve;
     let root = vault_dir(&app)?;
     let dir = notebook_dir(&root, &notebook)?;
     let external = {
@@ -448,6 +451,13 @@ pub(crate) async fn apply_chat_proposal(
             .ok_or("Proposal is no longer available")?;
         if proposal.applied {
             return Err("This proposal was already applied or attempted".into());
+        }
+        if auto {
+            // The switches are checked here so a stale or mistaken client cannot skip review.
+            if !policy.allows(&proposal.name) {
+                return Err("This action needs your approval".into());
+            }
+            proposal.arguments["auto_approved"] = json!(true);
         }
         if proposal.name.ends_with("_editor") {
             let current = editor.as_ref().ok_or("Editor context unavailable")?;
@@ -518,6 +528,37 @@ pub(crate) async fn apply_chat_proposal(
         ai::save_history(&app, &dir, &messages)?;
     }
     Ok(result)
+}
+
+#[derive(Serialize)]
+pub(crate) struct AutoApproveStatus {
+    #[serde(flatten)]
+    settings: ai::approval::AutoApprove,
+    /// Proposal names the current switches cover.
+    tools: Vec<&'static str>,
+}
+impl From<ai::approval::AutoApprove> for AutoApproveStatus {
+    fn from(settings: ai::approval::AutoApprove) -> Self {
+        Self {
+            tools: settings.tools(),
+            settings,
+        }
+    }
+}
+#[tauri::command]
+pub(crate) fn get_auto_approve(app: AppHandle) -> Result<AutoApproveStatus, String> {
+    Ok(crate::config::settings(&app)?.auto_approve.into())
+}
+#[tauri::command]
+pub(crate) fn set_auto_approve(
+    app: AppHandle,
+    settings: ai::approval::AutoApprove,
+) -> Result<AutoApproveStatus, String> {
+    crate::config::update(&app, |cfg| {
+        cfg.auto_approve = settings.clone();
+        Ok(())
+    })?;
+    Ok(settings.into())
 }
 
 #[tauri::command]
