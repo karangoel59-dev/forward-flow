@@ -46,6 +46,7 @@ const setup = el<HTMLElement>("setup");
 const writeView = el<HTMLElement>("write");
 const editor = el<HTMLTextAreaElement>("editor");
 const writeCount = el<HTMLElement>("write-count");
+const clearDraftButton = el<HTMLButtonElement>("write-clear");
 
 const reader = el<HTMLElement>("reader");
 const readerDate = el<HTMLElement>("reader-date");
@@ -151,6 +152,10 @@ async function moveCurrentEntry() {
 
 let editorRevision = 0;
 let editorToolBusy = false;
+// A draft has no history, so clearing takes a second tap and can be undone for a few seconds.
+let clearArmed = false;
+let clearedDraft: string | null = null;
+let clearTimer = 0;
 editor.addEventListener("input", () => { editorRevision++; });
 let chatNotebook: string | null = null;
 let chatVisible = true;
@@ -198,6 +203,7 @@ const chatController = setupChat(closeChat, message => hud(message, 5000), {
   },
   unlock: () => { editorToolBusy = false; editor.readOnly = false; writeNotebook.disabled = false; scheduleDraftSave(); },
   replace: async content => {
+    resetClearDraft();
     editor.value = content; editorRevision++; updateLiveCount(); scheduleFit(true);
     await invoke("save_draft", {content}).catch(e => hud(`Draft updated; local save will retry: ${String(e)}`, 5000));
   },
@@ -260,7 +266,63 @@ function countWords(str: string): number {
   return matches ? matches.length : 0;
 }
 
+function updateClearDraft() {
+  clearDraftButton.hidden = !editor.value.trim() && clearedDraft === null;
+  clearDraftButton.textContent = clearedDraft !== null ? "Undo clear" : clearArmed ? "Tap again to clear" : "Clear draft";
+}
+
+function resetClearDraft() {
+  clearArmed = false;
+  clearedDraft = null;
+  clearTimeout(clearTimer);
+  updateClearDraft();
+}
+
+function setDraft(content: string) {
+  editor.value = content;
+  // Chat proposals made against the old draft must not apply to the new one.
+  editorRevision++;
+  prevTextLength = 0;
+  clearTimeout(draftTimer);
+  invoke("save_draft", { content }).catch(() => {});
+  updateLiveCount();
+  scheduleFit(true);
+}
+
+function clearDraft() {
+  if (committing || editorToolBusy) return;
+  clearTimeout(clearTimer);
+  if (clearedDraft !== null) {
+    const restored = clearedDraft;
+    clearedDraft = null;
+    setDraft(restored);
+    hud("draft restored");
+    return;
+  }
+  if (!editor.value.trim()) return;
+  if (!clearArmed) {
+    clearArmed = true;
+    updateClearDraft();
+    clearTimer = window.setTimeout(resetClearDraft, 3000);
+    return;
+  }
+  clearArmed = false;
+  clearedDraft = editor.value;
+  setDraft("");
+  hud("draft cleared · undo for a few seconds", 4000);
+  clearTimer = window.setTimeout(resetClearDraft, 8000);
+}
+
+/** New writing replaces whatever a clear could have restored. */
+function draftTyped() {
+  if (clearArmed || clearedDraft !== null) resetClearDraft();
+  updateLiveCount();
+  scheduleFit();
+  scheduleDraftSave();
+}
+
 function updateLiveCount() {
+  updateClearDraft();
   const text = editor.value.trim();
   if (!text) {
     writeCount.hidden = true;
@@ -454,6 +516,7 @@ async function commit() {
   clearTimeout(draftTimer);
   try {
     const meta = await invoke<EntryMeta>("commit_entry", { content: editor.value, notebook: writeNotebook.value });
+    resetClearDraft();
     editor.classList.add("committing");
     window.setTimeout(() => {
       editor.value = "";
@@ -1063,11 +1126,8 @@ editor.addEventListener("keydown", (e) => {
   }
 });
 
-editor.addEventListener("input", () => {
-  updateLiveCount();
-  scheduleFit();
-  scheduleDraftSave();
-});
+editor.addEventListener("input", draftTyped);
+clearDraftButton.addEventListener("click", clearDraft);
 
 pickerFilter.addEventListener("input", () => {
   cursor = 0;
