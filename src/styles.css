@@ -340,3 +340,18 @@ button.chat-command-row:hover { background: color-mix(in srgb, var(--accent) 7%,
   .veil { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
   .action-review { width: 100%; max-width: 100%; max-height: 88dvh; margin: auto 0 0; border-radius: 20px 20px 0 0; padding: 1rem 1rem max(1rem, env(safe-area-inset-bottom)); }
 }
+.conflict-inner { width: 100%; max-width: 64rem; }
+.conflict-file { border: 1px solid var(--line); border-radius: 8px; padding: 1rem; margin: 1.25rem 0; min-width: 0; }
+.conflict-file legend { padding: 0 0.4rem; font: 500 0.8rem/1.5 var(--sans); overflow-wrap: anywhere; }
+.conflict-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.conflict-version h3 { color: var(--dim); font: 0.7rem/1.5 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 0.4rem; }
+.conflict-version pre { max-height: 18rem; overflow: auto; padding: 0.8rem; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font: 0.75rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conflict-options { display: flex; flex-wrap: wrap; gap: 0.25rem 1.5rem; margin-top: 0.8rem; font: 0.8rem/1.5 var(--sans); }
+.conflict-options label { display: flex; align-items: center; min-height: 44px; }
+.conflict-banner { position: fixed; top: max(0.75rem, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 20; max-width: calc(100% - 2rem); min-height: 44px; padding: 0.6rem 1rem; border: 1px solid var(--accent); border-radius: 6px; background: var(--surface); color: var(--accent); font: 0.78rem/1.5 var(--sans); box-shadow: 0 4px 18px rgb(0 0 0 / 12%); }
+.chat-command-item { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+.chat-command-item .chat-command-row { border-bottom: 0; min-width: 0; }
+.chat-command-item .chat-command-delete { flex-shrink: 0; white-space: nowrap; padding: 0.5rem 0.6rem; }
+@media (max-width: 700px) {
+  .conflict-versions { grid-template-columns: minmax(0, 1fr); }
+}

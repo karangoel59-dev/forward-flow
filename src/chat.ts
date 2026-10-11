@@ -61,16 +61,17 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     connections: async () => { await loadConnections(); return connections; },
     unavailable: () => busy || saving || opening || purposeSaving,
     busy: setBusy,
-    resume: async id => {
-      const data = await invoke<NotebookChat>("resume_notebook_chat", {notebook, id});
-      messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
-      el<HTMLElement>("chat-page-panel").hidden = true;
-      el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
-      render();
-    },
+    resume: async id => adopt(await invoke<NotebookChat>("resume_notebook_chat", {notebook, id})),
+    remove: async id => adopt(await invoke<NotebookChat>("delete_notebook_chat", {notebook, id})),
     newChat: startNewChat,
     refreshMcp: () => mcp.refresh(),
   });
+  function adopt(data: NotebookChat) {
+    messages = data.messages; purpose.value = data.purpose; version++; actions.reset();
+    el<HTMLElement>("chat-page-panel").hidden = true;
+    el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
+    render();
+  }
   async function startNewChat() {
     await invoke("clear_notebook_chat", {notebook});
     messages = []; version++; actions.reset();

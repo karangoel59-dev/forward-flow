@@ -4,7 +4,7 @@ export type ChatConnection = { id?: string; provider: string; model: string; mod
 type Session = { id: string; title: string; updated_at: string; provider?: string; model?: string; messages: number; active: boolean };
 type Server = { id: string; url: string; enabled: boolean; tool_discovery?: boolean; tools: unknown[] };
 type ModelList = { models: string[]; note: string };
-type Row = { label: string; detail?: string; run?: () => Promise<void> };
+type Row = { label: string; detail?: string; run?: () => Promise<void>; remove?: () => Promise<void> };
 type Dependencies = {
   notebook: () => string;
   provider: HTMLSelectElement;
@@ -12,6 +12,7 @@ type Dependencies = {
   unavailable: () => boolean;
   busy: (value: boolean, status?: string) => void;
   resume: (id: string) => Promise<void>;
+  remove: (id: string) => Promise<void>;
   newChat: () => Promise<void>;
   refreshMcp: () => Promise<void>;
 };
@@ -22,7 +23,7 @@ const commands = [
   { name: "/provider", detail: "List connections or /provider <provider>" },
   { name: "/model", detail: "List/switch models, /model saved, /model add <name>" },
   { name: "/mcp", detail: "Show servers or /mcp reconnect <server>" },
-  { name: "/resume", detail: "Resume a saved chat in this notebook" },
+  { name: "/resume", detail: "Resume or delete a saved chat in this notebook" },
   { name: "/new", detail: "Start a new chat; keep the current conversation" },
   { name: "/help", detail: "Show chat commands" },
 ];
@@ -56,7 +57,19 @@ export function setupChatCommands(deps: Dependencies) {
       }
       const name = document.createElement("span"); name.textContent = row.label; item.append(name);
       if (row.detail) { const detail = document.createElement("span"); detail.className = "hint"; detail.textContent = row.detail; item.append(detail); }
-      results.append(item);
+      if (!row.remove) { results.append(item); continue; }
+      // Deleting is permanent, so the first press only arms the button.
+      const remove = row.remove;
+      const wrap = document.createElement("div"); wrap.className = "chat-command-item";
+      const button = document.createElement("button"); button.type = "button"; button.className = "text-button chat-command-delete";
+      button.textContent = "Delete"; button.setAttribute("aria-label", `Delete conversation: ${row.label}`);
+      let armed = false;
+      button.addEventListener("click", () => {
+        if (armed) { void perform(remove); return; }
+        armed = true; button.textContent = "Delete forever?";
+      });
+      button.addEventListener("blur", () => { armed = false; button.textContent = "Delete"; });
+      wrap.append(item, button); results.append(wrap);
     }
   }
   function selectProvider(id: string, connections: ChatConnection[]) {
@@ -141,7 +154,7 @@ export function setupChatCommands(deps: Dependencies) {
     if (args.length && (!["list", "show"].includes(args[0]) || args.length !== 1)) throw new Error("Use /mcp, /mcp reconnect <server>, or /mcp enable|disable <server>.");
     show("MCP servers", servers.length ? "Saved servers and discovered tools. Select a server to reconnect and refresh its tools." : "No MCP servers saved. Add one under Purpose & connections.", servers.map(server => ({label:server.id,detail:`${server.enabled ? "Enabled" : "Disabled"} · ${server.tools.length} tools${server.enabled && server.tools.length ? (server.tool_discovery ? " · Available through discovery" : " · Available to chat") : ""} · ${server.url}`,run:async () => {await reconnect(server.id);show("MCP reconnected",`${server.id} tools refreshed.`);}})));
   }
-  async function resume(args: string[]) {
+  async function resume(args: string[], removed = "") {
     const sessions = await invoke<Session[]>("list_notebook_chats", {notebook:deps.notebook()});
     if (args.length > 1) throw new Error("Use /resume or /resume <conversation ID>.");
     if (args[0] && args[0] !== "list") {
@@ -149,7 +162,8 @@ export function setupChatCommands(deps: Dependencies) {
       if (!session) throw new Error("Conversation not found in this notebook.");
       await deps.resume(session.id); show("Conversation resumed", session.title); return;
     }
-    show("Saved conversations", sessions.length ? "Choose a conversation to continue. Your current conversation and editor draft are kept." : "No saved conversations in this notebook yet.", sessions.map(session => ({label:`${session.title}${session.active ? " · current" : ""}`,detail:`${session.messages} messages${session.provider ? ` · ${labels[session.provider] || session.provider}${session.model ? ` / ${session.model}` : ""}` : ""} · ${new Date(session.updated_at).toLocaleString()} · ${session.id}`,run:async () => {await deps.resume(session.id);show("Conversation resumed",session.title);}})));
+    const note = sessions.length ? "Choose a conversation to continue. Your current conversation and editor draft are kept." : "No saved conversations in this notebook yet.";
+    show("Saved conversations", removed ? `Deleted “${removed}”. ${note}` : note, sessions.map(session => ({label:`${session.title}${session.active ? " · current" : ""}`,detail:`${session.messages} messages${session.provider ? ` · ${labels[session.provider] || session.provider}${session.model ? ` / ${session.model}` : ""}` : ""} · ${new Date(session.updated_at).toLocaleString()} · ${session.id}`,run:async () => {await deps.resume(session.id);show("Conversation resumed",session.title);},remove:async () => {await deps.remove(session.id);await resume([], session.title);}})));
   }
   function updateBadge(connections: ChatConnection[]) {
     const connection = connections.find(c => connectionId(c) === deps.provider.value);

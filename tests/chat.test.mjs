@@ -403,3 +403,28 @@ test('failed streaming removes provisional reply and keeps the draft ready to re
   assert.doesNotMatch(app.element('chat-log').textContent,/Unconfirmed text/);
   assert.ok(app.notices.some(n=>n.includes('stream interrupted')));
 });
+
+test('history deletes a conversation only after a second press and reloads the open chat',async()=>{
+  const calls=[];
+  let sessions=[{id:'old',title:'Earlier ideas',messages:2,updated_at:'2026-10-09T00:00:00Z',active:true}];
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return {...notebook,messages:[{role:'user',content:'Earlier ideas'},{role:'assistant',content:'Old answer'}]};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='list_notebook_chats')return sessions;
+    if(command==='delete_notebook_chat'){sessions=[];return notebook;}
+  });
+  await app.controller.open('Ideas');
+  assert.match(app.element('chat-log').textContent,/Old answer/);
+  app.element('chat-history').click();await app.settle();
+  const remove=app.element('chat-command-results').querySelector('.chat-command-delete');
+  remove.click();await app.settle();
+  assert.equal(remove.textContent,'Delete forever?');
+  assert.equal(calls.some(([c])=>c==='delete_notebook_chat'),false);
+  remove.click();await app.settle();await app.settle();
+  assert.equal(JSON.stringify(calls.find(([c])=>c==='delete_notebook_chat')[1]),JSON.stringify({notebook:'Ideas',id:'old'}));
+  assert.match(app.element('chat-command-results').textContent,/Deleted “Earlier ideas”/);
+  assert.equal(app.element('chat-command-results').querySelector('.chat-command-delete'),null);
+  assert.doesNotMatch(app.element('chat-log').textContent,/Old answer/);
+  assert.equal(calls.some(([c])=>c==='resume_notebook_chat'||c==='chat_notebook'),false);
+});

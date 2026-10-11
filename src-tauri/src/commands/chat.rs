@@ -493,6 +493,22 @@ pub(crate) fn resume_notebook_chat(
     get_notebook_chat(app, notebook)
 }
 #[tauri::command]
+pub(crate) fn delete_notebook_chat(
+    app: AppHandle,
+    notebook: String,
+    id: String,
+) -> Result<NotebookChat, String> {
+    if CHAT_BUSY.swap(true, Ordering::SeqCst) {
+        return Err("Wait for the current reply before deleting a chat".into());
+    }
+    let _guard = ChatGuard;
+    {
+        let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        ai::history::delete(&app, &notebook_dir(&vault_dir(&app)?, &notebook)?, &id)?;
+    }
+    get_notebook_chat(app, notebook)
+}
+#[tauri::command]
 pub(crate) fn set_ai_model(app: AppHandle, provider: String, model: String) -> Result<(), String> {
     if CHAT_BUSY.swap(true, Ordering::SeqCst) {
         return Err("Wait for the current chat reply before changing models".into());

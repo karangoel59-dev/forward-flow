@@ -49,6 +49,7 @@ function frontend(invoke, chatOpen = async () => true, compact = false) {
     listen: () => Promise.resolve(),
     invoke,
     setupSettings: () => {},
+    setupConflicts: () => ({ review: async () => true, flag() {}, clear() {} }),
     setupChat: () => ({open: chatOpen}),
     renderMarkdown: body => body,
     externalMarkdownUrl: () => null,
@@ -244,4 +245,40 @@ test('mobile navigation shows one workspace and keeps editor and conversation wh
   assert.equal(app.editor.value,'My unsaved draft');
   await app.run('openNotebookChat("Ideas")');
   assert.deepEqual(opened,['','Ideas'],'reopening the same chat must preserve its state');
+});
+
+const pages = `[
+  {path:'a.md',name:'2026-01-01-000000',notebook:'',created:'x',words:300,preview:'opening lines',tags:[],links:[]},
+  {path:'b.md',name:'2026-01-02-000000',notebook:'',created:'x',words:4,preview:'something else',tags:['heron'],links:[]},
+]`;
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('page search adds matches from entry prose and shows where they were found', async () => {
+  const queries = [];
+  const app = frontend(async (command, args) => {
+    if (command === 'search_entries') { queries.push(args.query); return [{path:'a.md',snippet:'…the heron landed quietly…'}]; }
+  });
+  app.run(`entries = ${pages}; mode = 'picker'; pickerNotebook.value = '*'; pickerFilter.value = 'Landed'; renderPicker(); scheduleBodySearch()`);
+  assert.equal(app.run('shown.length'), 0, 'the preview alone does not match');
+  app.flushTimers();
+  await settle();
+  assert.deepEqual(queries, ['landed']);
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'a.md');
+  assert.equal(app.element('picker-list').children[0].children[1].textContent, '…the heron landed quietly…');
+
+  app.run(`pickerFilter.value = '#heron'; scheduleBodySearch(); renderPicker()`);
+  assert.equal(app.timerCount(), 0, 'tag filters stay local');
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'b.md');
+});
+
+test('a slow answer to an earlier search cannot replace newer results', async () => {
+  const answers = [];
+  const app = frontend((command) => command === 'search_entries' ? new Promise(resolve => answers.push(resolve)) : Promise.resolve());
+  app.run(`entries = ${pages}; mode = 'picker'; pickerNotebook.value = '*'; pickerFilter.value = 'landed'; scheduleBodySearch()`);
+  app.flushTimers();
+  app.run(`pickerFilter.value = 'opening'; renderPicker(); scheduleBodySearch()`);
+  answers[0]([{path:'b.md',snippet:'stale'}]);
+  await settle();
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'a.md');
+  assert.equal(app.element('picker-list').children[0].children[1].textContent, 'opening lines');
 });

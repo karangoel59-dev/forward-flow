@@ -1,5 +1,6 @@
 import { setupSettings } from "./settings";
 import { setupChat } from "./chat";
+import { setupConflicts } from "./conflicts";
 import { renderMarkdown, externalMarkdownUrl } from "./markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,7 +29,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook" | "conflict";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -71,6 +72,7 @@ const touchResync = el<HTMLButtonElement>("touch-resync");
 const touchDelete = el<HTMLButtonElement>("touch-delete");
 const remoteSyncNow = el<HTMLButtonElement>("remote-sync-now");
 
+const conflictView = el<HTMLElement>("conflict");
 const notebookView = el<HTMLElement>("notebook");
 const notebookName = el<HTMLInputElement>("notebook-name");
 const notebookError = el<HTMLElement>("notebook-error");
@@ -361,6 +363,7 @@ function show(next: Mode) {
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
   notebookView.hidden = next !== "notebook";
+  conflictView.hidden = next !== "conflict";
   updateNavigation();
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
@@ -388,12 +391,22 @@ function formatDate(raw: string) {
 
 // sync
 
-type SyncStatus = { state: "synced" | "offline" | "error"; detail: string };
+type SyncStatus = { state: "synced" | "quiet" | "offline" | "conflict" | "error"; detail: string };
+
+let conflictOrigin: Mode = "write";
+const conflicts = setupConflicts(
+  text => hud(text, 5000),
+  () => { if (mode !== "conflict") { conflictOrigin = mode === "setup" || mode === "notebook" ? "write" : mode; show("conflict"); } },
+  () => { if (mode === "conflict") { conflictOrigin === "picker" ? void openPicker() : show(conflictOrigin); } },
+);
 
 listen<SyncStatus>("sync-status", (event) => {
   const { state, detail } = event.payload;
+  if (state === "synced" || state === "quiet") conflicts.clear();
   if (state === "synced") hud("synced");
+  else if (state === "quiet") return;
   else if (state === "offline") hud("offline · will sync on the next save", 3600);
+  else if (state === "conflict") conflicts.flag(Number(detail) || 1);
   else hud(`sync failed · ${detail.slice(0, 90)}`, 6000);
 }).catch(() => {
   /* not running inside the app shell; nothing to report */
@@ -674,8 +687,37 @@ function sortEntries(list: EntryMeta[]): EntryMeta[] {
   }
 }
 
+// The filter narrows instantly on dates, previews and tags; prose matches arrive from the backend.
+type SearchHit = { path: string; snippet: string };
+let bodyHits = new Map<string, string>();
+let bodyQuery = "";
+let searchTimer = 0;
+
+function scheduleBodySearch() {
+  const query = pickerFilter.value.trim().toLowerCase();
+  clearTimeout(searchTimer);
+  if (!query || query.startsWith("#")) {
+    bodyHits = new Map();
+    bodyQuery = "";
+    return;
+  }
+  searchTimer = window.setTimeout(async () => {
+    try {
+      const hits = await invoke<SearchHit[]>("search_entries", { query });
+      // A slower answer to an earlier query must not replace newer results.
+      if (pickerFilter.value.trim().toLowerCase() !== query) return;
+      bodyHits = new Map(hits.map((hit) => [hit.path, hit.snippet]));
+      bodyQuery = query;
+      if (mode === "picker") renderPicker();
+    } catch {
+      /* the quick filter still works */
+    }
+  }, 180);
+}
+
 function renderPicker() {
   const raw = pickerFilter.value.trim().toLowerCase();
+  const prose = bodyQuery === raw ? bodyHits : null;
   let pool = entries;
 
   pickerNotebook.disabled = !!linkFor;
@@ -691,7 +733,7 @@ function renderPicker() {
       : pool.filter((e) => e.tags.length > 0);
   } else if (raw) {
     pool = pool.filter((e) =>
-      `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(raw),
+      `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(raw) || prose?.has(e.path),
     );
   }
 
@@ -727,7 +769,9 @@ function renderPicker() {
 
     const preview = document.createElement("div");
     preview.className = "row-preview";
-    preview.textContent = entry.preview || "—";
+    // Show where the words were found when they are past the opening lines.
+    const snippet = entry.preview.toLowerCase().includes(raw) ? undefined : prose?.get(entry.path);
+    preview.textContent = snippet || entry.preview || "—";
     const notebook = document.createElement("div");
     notebook.className = "row-notebook hint";
     notebook.textContent = entry.notebook || "Inbox";
@@ -763,6 +807,7 @@ async function openPicker() {
   pickerHead.hidden = !linkFor;
   pickerHead.textContent = linkFor ? "Link to which entry?" : "";
   pickerFilter.value = "";
+  scheduleBodySearch();
   cursor = 0;
   renderPicker();
   show("picker");
@@ -916,7 +961,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (mode === "setup" || mode === "remote") return;
+  if (mode === "setup" || mode === "remote" || mode === "conflict") return;
 
   if (mod && e.key.toLowerCase() === "o") {
     e.preventDefault();
@@ -1027,6 +1072,7 @@ editor.addEventListener("input", () => {
 pickerFilter.addEventListener("input", () => {
   cursor = 0;
   renderPicker();
+  scheduleBodySearch();
 });
 
 readerBody.addEventListener("click", (event) => {

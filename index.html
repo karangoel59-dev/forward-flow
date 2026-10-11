@@ -157,7 +157,7 @@
           type="text"
           spellcheck="false"
           autocomplete="off"
-          placeholder="Search your pages or #tags…"
+          placeholder="Search everything you wrote, or #tags…"
         />
         <ul id="picker-list"></ul>
         <footer class="picker-foot hint">
@@ -211,6 +211,16 @@
       </div>
     </section>
 
+    <section id="conflict" class="veil" hidden role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+      <div class="conflict-inner">
+        <div class="view-title"><div><span class="eyebrow">CHANGED IN TWO PLACES</span><h1 id="conflict-title">Choose what to keep<span class="brand-dot">.</span></h1></div><button id="conflict-cancel" class="text-button" type="button">Not now ↗</button></div>
+        <p class="hint">These pages changed on this device and on another before they could sync. Nothing is merged until you choose. Every other change syncs as usual.</p>
+        <div id="conflict-list"></div>
+        <p id="conflict-status" class="hint" role="status" aria-live="polite"></p>
+        <div class="remote-actions"><button id="conflict-apply" class="ghost-btn" type="button" disabled>Keep my choices and sync</button></div>
+      </div>
+    </section>
+
     <section id="notebook" class="veil" hidden>
       <form id="notebook-form" class="setup-inner">
         <span class="eyebrow">MAKE ROOM FOR A NEW THREAD</span>
@@ -237,6 +247,7 @@
       <p id="chat-review-status" class="hint" role="status" aria-live="polite"></p>
       <div class="action-review-footer"><button id="chat-approve-selected" class="ghost-btn" type="button" disabled>Approve selected</button></div>
     </dialog>
+    <button id="conflict-banner" class="conflict-banner" type="button" hidden></button>
     <div id="hud" class="hint" role="status" aria-live="polite"></div>
   </body>
 </html>

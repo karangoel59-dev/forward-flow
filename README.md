@@ -49,7 +49,9 @@ Inside an open entry:
 | `x` | Unlink the selected related entry |
 
 In the viewer's filter box, a query starting with `#` matches tags only;
-anything else matches date, prose and tags together.
+anything else matches date, tags and the full text of every entry. Dates, tags
+and opening lines narrow as you type; matches deeper in an entry follow a moment
+later and show the surrounding words.
 
 ## Markdown
 
@@ -75,6 +77,8 @@ Replies render as Markdown. **Save as page** opens an editable review; **Save
 page** then creates a new immutable Markdown entry in the same notebook. Your
 writing draft is preserved. Chat history persists on this device; **New
 conversation** starts another chat and keeps earlier conversations for `/resume`.
+**History** lists them; **Delete**, then **Delete forever?**, permanently removes
+one from this device. Deleting the open conversation starts a new one.
 
 Purposes live in `.notebook.json` and sync with the vault. API keys and chat
 histories live in app settings outside the vault, never in Git. Keys are stored
@@ -183,6 +187,22 @@ scope works as the password. Without a remote, entries just stay local.
 - **Window Focus Sync**: Returning to or focusing the app immediately triggers a sync check so entries written on other devices surface right away.
 - **Manual Re-sync**: Hit `⌘R` (or tap the "sync" button on touch, or "Sync now" in the remote screen) to immediately pull, merge, and push.
 - **Live Updating**: When new commits arrive from another device, the viewer and open entries automatically refresh without needing an app restart.
+
+### When two devices change the same page
+
+Entry prose never changes, but tags, links and notebook purposes can be edited on
+two devices before they sync. When that happens sync pauses for those files and a
+notice appears: **N pages changed on two devices · Review**. The review shows both
+versions side by side and asks for one choice per file:
+
+- **Keep this device** or **Keep other device** uses that version.
+- **Keep both** combines tags and links when the prose is identical. For anything
+  else it keeps this device's file and saves the other as `name-other-device`.
+- If one device deleted the file, choose between keeping it and deleting it.
+
+Nothing changes until you choose **Keep my choices and sync**. Changes to other
+files merge as usual, and the result is pushed as a `Resolve sync conflict`
+commit. **Not now** leaves everything as it is; the notice stays until resolved.
 
 On Android there is no folder picker, so the vault lives in the app's own
 private storage automatically — setting a remote there is how entries leave
