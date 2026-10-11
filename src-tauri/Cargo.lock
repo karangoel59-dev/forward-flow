@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "forward-flow"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "chrono",
  "foreign-types 0.3.2",
