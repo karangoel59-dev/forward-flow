@@ -359,3 +359,6 @@ button.chat-command-row:hover { background: color-mix(in srgb, var(--accent) 7%,
 .auto-approve-options label { display: flex; align-items: flex-start; gap: 0.5rem; min-height: 44px; padding: 0.4rem 0; }
 .auto-approve-options input { margin-top: 0.25rem; flex-shrink: 0; }
 .chat-auto-status { color: var(--accent); }
+.writing-label { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 44px; }
+.writing-label > .eyebrow { margin-bottom: 0; }
+#write-clear { flex-shrink: 0; white-space: nowrap; }

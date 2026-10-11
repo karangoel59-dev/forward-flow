@@ -341,6 +341,10 @@ is no path back into the editor for text that already exists.
 Drafts autosave to the app data directory, so quitting mid-thought doesn't
 lose anything; the draft is restored on next launch and removed on commit.
 
+**Clear draft**, above the editor, empties a draft without selecting and
+deleting it by hand. Tap it, then **Tap again to clear**. **Undo clear** brings
+the text back for a few seconds, until you start writing again.
+
 ## Typography
 
 The text sizes itself: it starts large and shrinks as the entry grows, so the
