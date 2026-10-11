@@ -495,6 +495,69 @@ mod tests {
     }
 
     #[test]
+    fn stop_drops_http_stream_before_incomplete_tool_can_execute() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            time::Duration,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/responses", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut headers = vec![];
+            let mut byte = [0];
+            while !headers.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                headers.push(byte[0]);
+            }
+            let headers = String::from_utf8(headers).unwrap().to_lowercase();
+            let length: usize = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            socket.read_exact(&mut vec![0; length]).unwrap();
+            let delta =
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Keep this text\"}\n\n";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n{delta}").unwrap();
+            socket.flush().unwrap();
+            // The client should close without waiting for a completed provider response.
+            match socket.read(&mut byte) {
+                Ok(0) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                other => panic!("Cancelled stream did not close: {other:?}"),
+            }
+        });
+        tauri::async_runtime::block_on(async {
+            let token = super::super::cancellation::Cancellation::default();
+            let mut text = String::new();
+            let result = token
+                .run(exchange(
+                    &Connection {
+                        provider: "openai".into(),
+                        api_key: "test-key".into(),
+                        ..Default::default()
+                    },
+                    &url,
+                    &json!({"input":"hello"}),
+                    |delta| {
+                        text.push_str(delta);
+                        token.cancel();
+                    },
+                ))
+                .await;
+            assert_eq!(result.unwrap_err(), "Chat stopped");
+            assert_eq!(text, "Keep this text");
+        });
+        server.join().unwrap();
+    }
+
+    #[test]
     fn http_delivers_delta_before_final_response_and_uses_stream_request() {
         use std::{
             io::{Read, Write},

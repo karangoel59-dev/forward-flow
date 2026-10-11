@@ -10,6 +10,7 @@ type Options = {
   refreshHistory: () => Promise<void>;
   notify: (message: string) => void;
   editor?: EditorBridge;
+  turn: (auto: boolean) => { turnId: string; begin: boolean };
 };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const labels: Record<string, string> = {
@@ -42,6 +43,7 @@ export function setupChatActions(options: Options) {
   const selected = new Set<string>();
   let proposals: Proposal[] = [];
   let running = false;
+  let epoch = 0;
   const pending = () => proposals.filter(p => !p.applied);
 
   function updateSelection() {
@@ -126,19 +128,25 @@ export function setupChatActions(options: Options) {
     if (running || options.unavailable()) return false;
     const queue = items.filter(p => !p.applied);
     if (!queue.length) return false;
+    const active = epoch;
+    const notebook = options.notebook();
+    const turn = options.turn(auto);
     let succeeded = false;
     running = true; options.running(true); renderReview();
     el<HTMLButtonElement>("chat-review-close").disabled = true;
     let completed = 0;
     try {
       for (const proposal of queue) {
+        if (active !== epoch) return false;
         status.textContent = `Running ${completed + 1} of ${queue.length}: ${title(proposal)}…`;
         const editorTool = proposal.name.endsWith("_editor");
         if (editorTool && (!options.editor || !options.editor.lock())) throw new Error("Finish saving the editor first.");
         try {
-          const result = await invoke<Record<string, unknown>>("apply_chat_proposal", { notebook: options.notebook(), id: proposal.id, editor: editorTool ? options.editor?.snapshot() : null, ...(auto ? { auto: true } : {}) });
+          const result = await invoke<Record<string, unknown>>("apply_chat_proposal", { notebook, turnId: turn.turnId, begin: turn.begin && completed === 0, id: proposal.id, editor: editorTool ? options.editor?.snapshot() : null, ...(auto ? { auto: true } : {}) });
+          if (active !== epoch) return false;
           proposal.applied = true; proposal.arguments.result = result; selected.delete(proposal.id);
           if (editorTool && typeof result.editor_content === "string") await options.editor!.replace(result.editor_content);
+          if (active !== epoch) return false;
           completed++;
           renderReview();
           if (result.error || result.isError) throw new Error(`${title(proposal)} reported an error. Review its result before continuing.`);
@@ -150,18 +158,25 @@ export function setupChatActions(options: Options) {
         : `${completed} ${completed === 1 ? "action" : "actions"} completed. Continue the conversation to use the results.`;
       options.notify(status.textContent);
     } catch (error) {
+      if (active !== epoch) return false;
       status.textContent = `${String(error)} Stopped; remaining actions were not run.`;
       options.notify(status.textContent);
     } finally {
-      try { await options.refreshHistory(); }
-      catch {
-        for (const proposal of queue) { proposal.applied = true; selected.delete(proposal.id); }
-        status.textContent = "Could not refresh action status. Reopen the conversation before retrying.";
-        options.notify(status.textContent);
-        succeeded = false;
+      if (active === epoch) {
+        try { await options.refreshHistory(); }
+        catch {
+          if (active === epoch) {
+            for (const proposal of queue) { proposal.applied = true; selected.delete(proposal.id); }
+            status.textContent = "Could not refresh action status. Reopen the conversation before retrying.";
+            options.notify(status.textContent);
+            succeeded = false;
+          }
+        }
+        if (active === epoch) {
+          running = false; options.running(false); renderReview();
+          el<HTMLButtonElement>("chat-review-close").disabled = false;
+        }
       }
-      running = false; options.running(false); renderReview();
-      el<HTMLButtonElement>("chat-review-close").disabled = false;
     }
     return succeeded;
   }
@@ -170,5 +185,5 @@ export function setupChatActions(options: Options) {
   dialog.addEventListener("cancel", event => { if (running) event.preventDefault(); });
   selectAll.addEventListener("change", () => { for (const p of pending()) { if (selectAll.checked) selected.add(p.id); else selected.delete(p.id); } renderReview(); });
   approve.addEventListener("click", () => void run(pending().filter(p => selected.has(p.id))));
-  return { card, refresh, run, reset: () => { selected.clear(); status.textContent = ""; dialog.close(); } };
+  return { card, refresh, run, reset: () => { epoch++; running = false; el<HTMLButtonElement>("chat-review-close").disabled = false; selected.clear(); status.textContent = ""; dialog.close(); } };
 }

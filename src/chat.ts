@@ -35,6 +35,11 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   let connections: Connection[] = [];
   let messages: Message[] = [];
   let busy = false;
+  let stopping = false;
+  let stopped = false;
+  let turnId = "";
+  let nextTurn = 0;
+  const newTurn = () => { stopped = false; turnId = `${Date.now()}-${++nextTurn}-${Math.random().toString(36).slice(2)}`; return turnId; };
   let saving = false;
   let purposeSaving = false;
   let version = 0;
@@ -80,7 +85,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   }
   /** Runs the newest reply's leading actions that the switches cover, then continues the chat. */
   async function autoApprove() {
-    if (!autoTools.length) return;
+    if (stopped || stopping || !autoTools.length) return;
     const latest = messages[messages.length - 1];
     const waiting = (latest?.role === "assistant" ? latest.proposals || [] : []).filter(p => !p.applied);
     // Actions run in order, so stop at the first one that still needs the user.
@@ -105,10 +110,13 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
 
   const actions = setupChatActions({
     notebook: () => notebook,
-    unavailable: () => busy || saving || opening || purposeSaving,
+    turn: auto => ({ turnId: auto ? turnId : newTurn(), begin: !auto }),
+    unavailable: () => busy || saving || opening || purposeSaving || stopping || stopped,
     running: value => { saving = value; setBusy(value, "Running approved actions…"); if (!value) render(); },
     refreshHistory: async () => {
+      const active = version;
       const data = await invoke<NotebookChat>("get_notebook_chat", {notebook});
+      if (active !== version) return;
       messages = data.messages;
       if (purpose.value === savedPurpose) purpose.value = data.purpose;
       savedPurpose = data.purpose;
@@ -121,7 +129,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     notebook: () => notebook,
     provider,
     connections: async () => { await loadConnections(); return connections; },
-    unavailable: () => busy || saving || opening || purposeSaving,
+    unavailable: () => busy || saving || opening || purposeSaving || stopping,
     busy: setBusy,
     resume: async id => adopt(await invoke<NotebookChat>("resume_notebook_chat", {notebook, id})),
     remove: async id => adopt(await invoke<NotebookChat>("delete_notebook_chat", {notebook, id})),
@@ -129,6 +137,8 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     refreshMcp: () => mcp.refresh(),
   });
   function adopt(data: NotebookChat) {
+    turnId = "";
+    stopped = data.messages[data.messages.length - 1]?.tool_pause === "stopped";
     messages = data.messages; purpose.value = data.purpose; savedPurpose = data.purpose; version++; actions.reset();
     el<HTMLElement>("chat-page-panel").hidden = true;
     el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
@@ -136,7 +146,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   }
   async function startNewChat() {
     await invoke("clear_notebook_chat", {notebook});
-    messages = []; version++; actions.reset();
+    turnId = ""; stopped = false; messages = []; version++; actions.reset();
     el<HTMLElement>("chat-page-panel").hidden = true;
     render();
   }
@@ -189,6 +199,9 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       body.innerHTML = renderMarkdown(message.content);
       if (streaming) streamBody = body;
       article.append(label, body);
+      if ((message as Message).tool_pause === "stopped") {
+        const notice = document.createElement("p"); notice.className = "hint"; notice.textContent = "Chat stopped. Already started actions may have completed. Send a message or start a new conversation."; article.append(notice);
+      }
       if (message.role === "assistant" && !streaming) {
         const button = document.createElement("button");
         button.className = "text-button";
@@ -216,7 +229,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     });
     const count = actions.refresh(messages.flatMap(message => message.proposals || []));
     const latest = messages[messages.length - 1];
-    const canContinue = latest?.role === "assistant" && (Boolean(latest.tool_pause) || /Reached the tool (limit|context limit)|too many tools at once/.test(latest.content) || Boolean(latest.proposals?.length));
+    const canContinue = !stopped && latest?.role === "assistant" && (Boolean(latest.tool_pause) || /Reached the tool (limit|context limit)|too many tools at once/.test(latest.content) || Boolean(latest.proposals?.length));
     el<HTMLElement>("chat-action-bar").hidden = !count && !canContinue;
     el<HTMLElement>("chat-action-count").textContent = count ? `${count} ${count === 1 ? "action needs" : "actions need"} approval` : "Ready to continue";
     el<HTMLElement>("chat-action-hint").textContent = count ? "Review and approve together." : "Use completed results in the next step.";
@@ -235,13 +248,17 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     el<HTMLButtonElement>("chat-history").disabled = value;
     el<HTMLButtonElement>("chat-review-actions").disabled = value;
     el<HTMLButtonElement>("chat-options").disabled = value;
-    el<HTMLElement>("chat-status").textContent = value ? status : "";
+    for (const id of ["chat-stop", "chat-review-stop"]) {
+      el<HTMLButtonElement>(id).disabled = stopping;
+      el<HTMLButtonElement>(id).textContent = stopping ? "Stopping…" : value ? "Stop" : "End chat";
+    }
+    el<HTMLElement>("chat-status").textContent = stopping ? "Stopping…" : value ? status : stopped ? "Chat stopped. Send a message or start a new conversation." : "";
   }
   async function send(continuation = false, automatic = false) {
     if (!automatic) autoSteps = 0;
     let replied = false;
     const text = continuation ? "Continue my previous request using the completed tool results. Do not repeat completed actions; leave any unapproved actions pending." : input.value.trim();
-    if (busy || saving || opening || purposeSaving || !text) return;
+    if (busy || saving || opening || purposeSaving || stopping || !text) return;
     if (text.startsWith("/") && await commands.run(text)) return;
     commands.clear();
     if (!connections.some(c => connectionId(c) === provider.value && c.configured)) {
@@ -255,7 +272,9 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       notify("Connect this provider before chatting.");
       return;
     }
+    if (!automatic) newTurn();
     const active = version;
+    const activeTurn = turnId;
     let receiving = true;
     const onStream = new Channel<StreamEvent>();
     onStream.onmessage = event => {
@@ -279,7 +298,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       pending = { user: text, content: "" };
       log.setAttribute("aria-busy", "true");
       render();
-      const reply = await invoke<Reply>("chat_notebook", { notebook, provider: provider.value, message: text, editor: snapshot, onStream });
+      const reply = await invoke<Reply>("chat_notebook", { notebook, provider: provider.value, message: text, editor: snapshot, onStream, turnId: activeTurn, begin: !automatic });
       if (active !== version) return;
       const follow = log.scrollHeight - log.scrollTop - log.clientHeight < 100;
       const scrollTop = log.scrollTop;
@@ -295,13 +314,41 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     }
     finally {
       receiving = false;
-      window.clearTimeout(streamTimer); streamTimer = 0;
-      pending = null; streamBody = null;
-      log.setAttribute("aria-busy", "false");
-      setBusy(false);
+      if (active === version) {
+        window.clearTimeout(streamTimer); streamTimer = 0;
+        pending = null; streamBody = null;
+        log.setAttribute("aria-busy", "false");
+        setBusy(false);
+      }
     }
     if (replied && active === version) await autoApprove();
   }
+  async function stopChat() {
+    if (stopping || opening || purposeSaving || (saving && !busy)) return;
+    const scope = notebook;
+    const id = turnId;
+    version++;
+    const active = version;
+    stopped = true; stopping = true; autoSteps = 0;
+    if (pending) {
+      messages = [...messages, { role: "user", content: pending.user }, { role: "assistant", content: pending.content, tool_pause: "stopped" }];
+      input.value = "";
+    } else if (messages[messages.length - 1]?.role === "assistant") messages[messages.length - 1]!.tool_pause = "stopped";
+    pending = null; streamBody = null;
+    window.clearTimeout(streamTimer); streamTimer = 0;
+    actions.reset(); saving = false;
+    log.setAttribute("aria-busy", "false");
+    setBusy(true); render();
+    try {
+      const data = await invoke<NotebookChat>("stop_notebook_chat", { notebook: scope, turnId: id });
+      if (active === version && data?.messages?.length) messages = data.messages;
+    } catch (error) {
+      if (active === version) notify(`Could not confirm backend cancellation: ${String(error)}. Automatic actions remain stopped here; already started actions may complete.`);
+    } finally {
+      if (active === version) { stopping = false; setBusy(false); render(); }
+    }
+  }
+  for (const id of ["chat-stop", "chat-review-stop"]) el<HTMLButtonElement>(id).addEventListener("click", () => void stopChat());
   el<HTMLElement>("chat-form").addEventListener("submit", e => { e.preventDefault(); send(); });
   input.addEventListener("keydown", e => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
@@ -326,7 +373,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
   provider.addEventListener("change", () => commands.refresh(connections));
   el<HTMLElement>("ai-form").addEventListener("submit", async e => {
     e.preventDefault();
-    if (busy || saving || opening || purposeSaving) return;
+    if (busy || saving || opening || purposeSaving || stopping) return;
     const button = el<HTMLButtonElement>("ai-save");
     saving = true;
     button.disabled = true;
@@ -348,7 +395,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
     finally { purposeSaving = false; }
   });
   el<HTMLButtonElement>("chat-reset").addEventListener("click", async () => {
-    if (busy || saving || opening || purposeSaving) return;
+    if (busy || saving || opening || purposeSaving || stopping) return;
     setBusy(true, "Starting conversation…");
     try { await startNewChat(); commands.clear(); notify("New conversation. Previous chats are available with /resume."); }
     catch (e) { notify(String(e)); }
@@ -385,6 +432,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         // Not awaited: a slow settings read must never hold up opening the chat.
         void loadAutoApprove();
         notebook = selected;
+        turnId = "";
         actions.reset();
         commands.clear();
         version++;
@@ -392,6 +440,8 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
         el<HTMLElement>("chat-page-panel").hidden = true;
         purpose.value = data.purpose; savedPurpose = data.purpose;
         messages = data.messages;
+        stopped = messages[messages.length - 1]?.tool_pause === "stopped";
+        setBusy(false);
         el<HTMLElement>("chat-context").textContent = `${data.pages} pages in this notebook`;
         await mcp.refresh().catch(e => notify(String(e)));
         if (!connections.some(c => connectionId(c) === provider.value && c.configured)) provider.value = connectionId(connections.find(c=>c.configured)||connections[0]||{provider:"openai",model:"",configured:false});
