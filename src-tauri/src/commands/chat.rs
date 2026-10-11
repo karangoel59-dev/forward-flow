@@ -115,30 +115,46 @@ pub(crate) fn clear_notebook_chat(app: AppHandle, notebook: String) -> Result<()
     ai::history::start_new(&app, &notebook_dir(&vault_dir(&app)?, &notebook)?)
 }
 
-fn context(root: &PathBuf, notebook: &str) -> Result<(Vec<Value>, usize), String> {
+/// Bytes of page prose sent with each message.
+const CONTEXT_BUDGET: usize = 60_000;
+
+/// The notebook pages to send with a message, chosen by relevance when they cannot all fit.
+/// `questions` are the user's recent messages with a weight each, most recent first.
+fn context(
+    root: &PathBuf,
+    notebook: &str,
+    questions: &[(&str, f64)],
+) -> Result<(Vec<Value>, usize), String> {
     let entries: Vec<_> = collect_entries(root)
         .into_iter()
         .filter(|e| e.notebook == notebook)
         .collect();
     let total = entries.len();
     let mut pages = vec![];
-    let mut remaining = 60_000;
     for entry in entries {
+        // A page larger than the whole budget can never be sent; do not read it.
         if fs::metadata(&entry.path)
             .map_err(|_| "Cannot read page metadata")?
             .len()
-            > (remaining + 4096) as u64
+            > (CONTEXT_BUDGET + 4096) as u64
         {
             continue;
         }
         let raw = fs::read_to_string(&entry.path).map_err(|_| "Cannot read a notebook page")?;
         let (_, body) = split_frontmatter(&raw);
-        if body.len() > remaining {
+        if body.len() > CONTEXT_BUDGET {
             continue;
         }
-        remaining -= body.len();
-        pages.push(json!({"filename":format!("{}.md",entry.name),"body":body}));
+        pages.push(ai::context::Page {
+            filename: format!("{}.md", entry.name),
+            body,
+            tags: entry.tags,
+        });
     }
+    let pages = ai::context::select(pages, questions, CONTEXT_BUDGET)
+        .into_iter()
+        .map(|page| json!({"filename":page.filename,"body":page.body}))
+        .collect();
     Ok((pages, total))
 }
 
@@ -172,8 +188,19 @@ pub(crate) async fn chat_notebook(
             content: message.trim().into(),
         });
         ai::validate_messages(&messages)?;
-        let (pages, total) = context(&root, &notebook)?;
-        let system = ai::system_prompt(&read_purpose(&dir)?, &pages);
+        // A follow-up such as "and after that?" leans on the question before it.
+        let mut asked = messages.iter().rev().filter(|m| m.role == "user");
+        let questions: Vec<(&str, f64)> = asked
+            .next()
+            .map(|m| (m.content.as_str(), 1.0))
+            .into_iter()
+            .chain(asked.next().map(|m| (m.content.as_str(), 0.5)))
+            .collect();
+        let (pages, total) = context(&root, &notebook, &questions)?;
+        let mut system = ai::system_prompt(&read_purpose(&dir)?, &pages);
+        if pages.len() < total {
+            system.push_str(&format!("\n\n{} more pages in this notebook are not included above; these were chosen as the newest and the most related to the question. Use search_entries and read_entry when the answer may be in a page you cannot see.", total - pages.len()));
+        }
         (dir, messages, system, pages.len(), total, connection)
     };
     let provider = connection.provider.clone();
@@ -365,10 +392,35 @@ mod tests {
         fs::write(root.join("Ideas/a.md"), "selected page").unwrap();
         fs::write(root.join("Ideas/Nested/b.md"), "different notebook").unwrap();
         fs::write(root.join("Ideas/huge.md"), "x".repeat(60_001)).unwrap();
-        let (pages, total) = context(&root, "Ideas").unwrap();
+        let (pages, total) = context(&root, "Ideas", &[("private inbox", 1.0)]).unwrap();
         assert_eq!(total, 2);
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0]["body"], "selected page");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_large_notebook_sends_the_pages_related_to_the_question() {
+        let root = std::env::temp_dir().join(format!("ff-chat-relevance-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        // Forty 5 KB pages; names sort newest first, and only the oldest is about lighthouses.
+        for i in 0..40 {
+            let topic = if i == 0 { "The lighthouse keeper waved. " } else { "Ordinary errands today. " };
+            let body = format!("{topic}{}", "filler ".repeat(710));
+            fs::write(root.join(format!("2026-01-{:02}-000000.md", i + 1)), format!("---\ntags: []\n---\n\n{body}\n")).unwrap();
+        }
+        let filenames = |question: &str| -> Vec<String> {
+            let (pages, total) = context(&root, "", &[(question, 1.0)]).unwrap();
+            assert_eq!(total, 40);
+            assert!(pages.len() < 40);
+            assert!(pages.iter().map(|p| p["body"].as_str().unwrap().len()).sum::<usize>() <= CONTEXT_BUDGET);
+            pages.iter().map(|p| p["filename"].as_str().unwrap().to_owned()).collect()
+        };
+        let related = filenames("What happened at the lighthouse?");
+        assert!(related.contains(&"2026-01-01-000000.md".to_string()));
+        assert_eq!(related[0], "2026-01-40-000000.md", "the newest page still leads");
+        let recent = filenames("What should I do next?");
+        assert!(!recent.contains(&"2026-01-01-000000.md".to_string()));
         fs::remove_dir_all(root).unwrap();
     }
 }

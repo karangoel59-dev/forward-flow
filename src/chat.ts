@@ -224,7 +224,7 @@ export function setupChat(close: () => void, notify: (message: string) => void, 
       if (!continuation) input.value = "";
       render(false);
       log.scrollTop = follow ? log.scrollHeight : scrollTop;
-      el<HTMLElement>("chat-context").textContent = `${reply.included_pages} of ${reply.total_pages} pages included${reply.included_pages < reply.total_pages ? " · some pages exceeded the context limit" : ""}`;
+      el<HTMLElement>("chat-context").textContent = `${reply.included_pages} of ${reply.total_pages} pages included${reply.included_pages < reply.total_pages ? " · chosen by relevance to your question" : ""}`;
     } catch (e) {
       if (active === version) { pending = null; render(); notify(String(e)); }
     }

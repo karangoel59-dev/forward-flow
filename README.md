@@ -70,8 +70,14 @@ model list. You can switch connections and models between turns.
 
 When you send a message, the app sends the notebook purpose, conversation, and
 pages directly in that notebook to the chosen provider. It includes up to 60 KB
-of page text, newest first, skipping pages that do not fit. The response shows
-how many pages were included. Child notebooks have separate context.
+of page text. A notebook that fits is sent whole. A larger one sends the newest
+pages (a quarter of the space) plus the pages that share the most words, tags
+or dates with your question and the one before it, and fills any room left with
+newer pages. Matching is by words, not meaning, and happens on your device. The
+model is told how many pages it did not receive and can search and read them
+with notebook tools. Pages are never cut short; one that does not fit is left
+out. The response shows how many pages were included. Child notebooks have
+separate context.
 
 Replies render as Markdown. **Save as page** opens an editable review; **Save
 page** then creates a new immutable Markdown entry in the same notebook. Your
