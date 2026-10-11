@@ -259,6 +259,28 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn stopped_text_and_attempted_actions_survive_new_chat_and_resume() {
+        use serde_json::json;
+        let dir = std::env::temp_dir().join(format!("ff-stopped-history-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        let message: Message = serde_json::from_value(json!({"role":"assistant","content":"Received text","tool_pause":"stopped","proposals":[{"id":"external","name":"mcp_call","arguments":{"result":{"notice":"Outcome unknown"}},"before":[],"applied":true}]})).unwrap();
+        let mut store = Store {
+            version: 1,
+            active: "old".into(),
+            conversations: vec![conversation("old".into(), vec![message])],
+        };
+        start(&mut store);
+        persist(&path, &store).unwrap();
+        let mut loaded = load(&path).unwrap();
+        select(&mut loaded, "old").unwrap();
+        let old = loaded.conversations.iter().find(|c| c.id == "old").unwrap();
+        assert_eq!(old.messages[0].content, "Received text");
+        assert_eq!(old.messages[0].tool_pause.as_deref(), Some("stopped"));
+        assert!(old.messages[0].proposals[0].applied);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn deleting_removes_one_conversation_and_replaces_the_open_one() {
         let message = |text: &str| -> Message {
             serde_json::from_value(json!({"role":"user","content":text})).unwrap()

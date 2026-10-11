@@ -201,6 +201,29 @@ retain received text with an explicit notice and a **Continue** option;
 incomplete tool arguments are never executed. If no text arrived, the composer
 keeps your question ready to retry.
 
+
+**Stop** stays available in the chat header and the approval dialog during
+streaming, tool work, and auto-approval. When idle it reads **End chat**. It
+invalidates the current turn, stops queued approved actions and automatic
+continuations, and cancels pending provider and MCP requests by dropping their
+local request futures. Received text, completed tool results, proposals and
+history are retained with an explicit **Chat stopped** state, including when
+reopening the conversation. Incomplete tool calls are not executed. Send an
+explicit new message to begin another turn, or choose **New conversation**;
+ending a chat does not delete its history. **Hide chat** only hides the panel.
+
+Cancellation is best effort: providers or remote tools may continue processing
+a request already sent. An external proposal is marked attempted before sending
+and retains an unknown-outcome notice if stopped; check the server before
+requesting the action again. Stop cannot undo completed external side effects,
+page writes, editor changes already applied, or sync work already launched.
+A synchronous local action may finish before Stop can persist its state, but
+remaining queued actions will not run. Late responses cannot overwrite stopped
+history or a newly opened conversation. If backend cancellation cannot be
+confirmed, chat shows an error and stops its local automatic queue; already
+started backend work may still finish. Stop state and received text are saved
+when Stop completes; a process crash before that may leave the last checkpoint.
+
 ## Notebooks
 
 Create a notebook with **+ New notebook** on the writing page or in the archive.

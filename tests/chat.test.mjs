@@ -536,3 +536,101 @@ test('auto-approve switches save immediately and a failed save is not left showi
   assert.equal(app.element('auto-deletions').checked,false);
   assert.match(app.element('auto-approve-status').textContent,/Cannot save settings/);
 });
+
+test('Stop preserves streaming text and ignores late results while a fresh notebook is busy', async()=>{
+  const requests=[];
+  const app=chat(async(command,args)=>{
+    if(command==='get_notebook_chat')return {...notebook,messages:[]};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='chat_notebook')return new Promise(resolve=>requests.push({args,resolve}));
+  });
+  await app.controller.open('Ideas');
+  app.element('chat-input').value='First question';app.submit('chat-form');
+  assert.equal(app.element('chat-stop').disabled,false);
+  requests[0].args.onStream.onmessage({event:'text',delta:'Received answer'});
+  app.element('chat-stop').click();await app.settle();
+  assert.match(app.element('chat-log').textContent,/First question.*Received answer.*Chat stopped/s);
+  assert.equal(app.element('chat-send').disabled,false);
+  assert.equal(app.element('chat-continue').hidden,true);
+  assert.equal(await app.controller.open('Work'),true);
+  app.element('chat-input').value='Second question';app.submit('chat-form');
+  requests[0].args.onStream.onmessage({event:'text',delta:'late stream'});
+  requests[0].resolve({messages:[{role:'assistant',content:'late reply'}],included_pages:99,total_pages:99});
+  await app.settle();
+  assert.equal(app.element('chat-send').disabled,true,'old finally must not unlock the new request');
+  assert.equal(app.element('chat-log').getAttribute('aria-busy'),'true');
+  assert.doesNotMatch(app.element('chat-log').textContent,/late/);
+  requests[1].resolve({messages:[{role:'assistant',content:'Fresh answer'}],included_pages:1,total_pages:2});await app.settle();
+  assert.match(app.element('chat-log').textContent,/Fresh answer/);
+  assert.notEqual(requests[0].args.turnId,requests[1].args.turnId);
+});
+
+test('Stop cancels queued auto-approval and ignores an in-flight editor result',async()=>{
+  const calls=[];let finish;
+  let replaces=0,unlocks=0;
+  const proposals=['one','two'].map(id=>({id,name:'replace_editor',arguments:{content:id},before:[],applied:false}));
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return {...notebook,messages:[]};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='get_auto_approve')return {tools:['replace_editor'],editor:true};
+    if(command==='chat_notebook')return {messages:[{role:'assistant',content:'Prepared edits',proposals}],included_pages:2,total_pages:2};
+    if(command==='apply_chat_proposal')return new Promise(resolve=>{finish=resolve;});
+  },{snapshot:()=>({content:'draft',notebook:'Ideas',revision:1}),lock:()=>true,unlock:()=>{unlocks++;},replace:async()=>{replaces++;}});
+  await app.controller.open('Ideas');app.element('chat-input').value='Edit';app.submit('chat-form');await app.settle();
+  assert.equal(calls.filter(([c])=>c==='apply_chat_proposal').length,1);
+  assert.equal(app.element('chat-stop').disabled,false);
+  app.element('chat-stop').click();await app.settle();
+  finish({editor_content:'Late edit'});await app.settle();await app.settle();
+  assert.equal(replaces,0);
+  assert.equal(unlocks,1);
+  assert.equal(calls.filter(([c])=>c==='apply_chat_proposal').length,1,'second queued action must not run');
+  assert.equal(calls.filter(([c])=>c==='chat_notebook').length,1,'automatic continuation must not run');
+  assert.equal(proposals[0].applied,false,'late results must not mutate local history');
+  assert.equal(app.element('chat-send').disabled,false);
+  assert.match(app.element('chat-status').textContent,/stopped/);
+});
+
+test('approval dialog Stop stays accessible and late external rejection cannot alter a new conversation',async()=>{
+  let fail;const calls=[];
+  const proposals=['one','two'].map(id=>({id,name:'mcp_call',arguments:{server:'remote',tool:'write',input:{}},before:[],applied:false}));
+  let fresh=false;
+  const app=chat(async(command,args)=>{
+    calls.push(command);
+    if(command==='get_notebook_chat')return fresh?notebook:{...notebook,messages:[{role:'assistant',content:'Actions',proposals}]};
+    if(command==='get_ai_connections')return [connection];
+    if(command==='apply_chat_proposal')return new Promise((resolve,reject)=>{fail=reject;});
+    if(command==='clear_notebook_chat')fresh=true;
+  });
+  await app.controller.open('Ideas');app.element('chat-review-actions').click();
+  const all=app.element('chat-select-all');all.checked=true;all.dispatchEvent(new all.ownerDocument.defaultView.Event('change'));
+  app.element('chat-approve-selected').click();
+  assert.equal(app.element('chat-review').open,true);
+  assert.equal(app.element('chat-review-stop').disabled,false);
+  app.element('chat-review-stop').click();await app.settle();
+  assert.equal(app.element('chat-review').open,false);
+  app.element('chat-reset').click();await app.settle();
+  fail(new Error('late external error'));await app.settle();
+  assert.equal(calls.filter(c=>c==='apply_chat_proposal').length,1);
+  assert.equal(app.element('chat-send').disabled,false);
+  assert.doesNotMatch(app.element('chat-log').textContent,/Actions|late external error/);
+  assert.equal(app.notices.some(n=>n.includes('late external error')),false);
+});
+
+test('stopped history reopens explicitly and a subsequent user message begins a new turn',async()=>{
+  const calls=[];
+  const history={...notebook,messages:[{role:'user',content:'Old question'},{role:'assistant',content:'Partial text',tool_pause:'stopped'}]};
+  const app=chat(async(command,args)=>{
+    calls.push([command,args]);
+    if(command==='get_notebook_chat')return history;
+    if(command==='get_ai_connections')return [connection];
+    if(command==='chat_notebook')return {messages:[...history.messages,{role:'assistant',content:'New answer'}],included_pages:2,total_pages:2};
+  });
+  await app.controller.open('Ideas');
+  assert.match(app.element('chat-status').textContent,/stopped/);
+  assert.match(app.element('chat-log').textContent,/Partial text.*Chat stopped/s);
+  assert.equal(app.element('chat-continue').hidden,true);
+  app.element('chat-input').value='Next question';app.submit('chat-form');await app.settle();
+  assert.equal(calls.find(([c])=>c==='chat_notebook')[1].begin,true);
+  assert.match(app.element('chat-log').textContent,/New answer/);
+});

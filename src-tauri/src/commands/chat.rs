@@ -15,6 +15,9 @@ use std::{
 };
 use tauri::{ipc::Channel, AppHandle, Emitter};
 
+static TURNS: std::sync::Mutex<ai::cancellation::Turns> =
+    std::sync::Mutex::new(ai::cancellation::Turns::new());
+
 static CHAT_BUSY: AtomicBool = AtomicBool::new(false);
 struct ChatGuard;
 impl Drop for ChatGuard {
@@ -112,7 +115,44 @@ pub(crate) fn clear_notebook_chat(app: AppHandle, notebook: String) -> Result<()
     }
     let _guard = ChatGuard;
     let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    TURNS.lock().unwrap_or_else(|e| e.into_inner()).invalidate();
     ai::history::start_new(&app, &notebook_dir(&vault_dir(&app)?, &notebook)?)
+}
+
+/// Cancellation cannot undo local writes or remote side effects already started.
+#[tauri::command]
+pub(crate) fn stop_notebook_chat(
+    app: AppHandle,
+    notebook: String,
+    turn_id: String,
+) -> Result<NotebookChat, String> {
+    // Signal first: a synchronous action holding the vault lock may finish, but
+    // the next queued action must see cancellation before it can acquire that lock.
+    let token = TURNS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .stop(&turn_id, &notebook);
+    {
+        let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        let current = TURNS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_current(&turn_id, &notebook);
+        if (token.is_some() && current) || turn_id.is_empty() {
+            let dir = notebook_dir(&vault_dir(&app)?, &notebook)?;
+            let mut messages = ai::history(&app, &dir)?;
+            if let Some(last) = messages.last_mut().filter(|m| m.role == "assistant") {
+                if last.tool_pause.as_deref() == Some("generating") {
+                    if let Some(token) = &token {
+                        last.content = token.text.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    }
+                }
+                last.tool_pause = Some("stopped".into());
+                ai::save_history(&app, &dir, &messages)?;
+            }
+        }
+    }
+    get_notebook_chat(app, notebook)
 }
 
 /// Bytes of page prose sent with each message.
@@ -166,14 +206,17 @@ pub(crate) async fn chat_notebook(
     message: String,
     editor: Option<ai::editor::EditorContext>,
     on_stream: Channel<ChatStream>,
+    turn_id: String,
+    begin: bool,
 ) -> Result<ChatReply, String> {
-    if CHAT_BUSY.swap(true, Ordering::SeqCst) {
-        return Err("A chat reply is already in progress".into());
-    }
-    let _guard = ChatGuard;
     let connection_id = provider;
-    let (dir, mut messages, system, included_pages, total_pages, connection) = {
+    let (token, dir, mut messages, system, included_pages, total_pages, connection) = {
         let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        let token = TURNS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter(&turn_id, &notebook, begin)?;
+        token.check()?;
         let root = vault_dir(&app)?;
         let dir = notebook_dir(&root, &notebook)?;
         let connection = ai::connections(&app)?
@@ -201,7 +244,23 @@ pub(crate) async fn chat_notebook(
         if pages.len() < total {
             system.push_str(&format!("\n\n{} more pages in this notebook are not included above; these were chosen as the newest and the most related to the question. Use search_entries and read_entry when the answer may be in a page you cannot see.", total - pages.len()));
         }
-        (dir, messages, system, pages.len(), total, connection)
+        // Persist the submitted message before releasing the setup lock, so an
+        // immediate Stop can retain it even before the HTTP request starts.
+        let mut received = messages.clone();
+        received.push(Message {
+            role: "assistant".into(),
+            content: String::new(),
+            proposals: vec![],
+            tool_results: vec![],
+            tool_pause: Some("generating".into()),
+        });
+        ai::history::save(
+            &app,
+            &dir,
+            &received,
+            Some((&connection_id, &connection.model)),
+        )?;
+        (token, dir, messages, system, pages.len(), total, connection)
     };
     let provider = connection.provider.clone();
     if let Some(context) = &editor {
@@ -225,15 +284,26 @@ pub(crate) async fn chat_notebook(
     let mut reply = String::new();
     let mut tool_pause = None;
     for round in 0..6 {
+        token.check()?;
         let mut partial = String::new();
         let _ = on_stream.send(ChatStream::Round { round });
-        let response = ai::streaming::exchange(&connection, &url, &body, |delta| {
-            partial.push_str(delta);
-            let _ = on_stream.send(ChatStream::Text {
-                delta: delta.into(),
-            });
-        })
-        .await;
+        let response = token
+            .run(ai::streaming::exchange(&connection, &url, &body, |delta| {
+                if token.check().is_err() {
+                    return;
+                }
+                partial.push_str(delta);
+                token
+                    .text
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_str(delta);
+                let _ = on_stream.send(ChatStream::Text {
+                    delta: delta.into(),
+                });
+            }))
+            .await;
+        token.check()?;
         let data = match response {
             Ok(data) => data,
             Err(error) if round > 0 || !partial.is_empty() => {
@@ -241,7 +311,12 @@ pub(crate) async fn chat_notebook(
                 reply = interrupted_reply(&partial, &error);
                 break;
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+                token.check()?;
+                ai::save_history(&app, &dir, &messages[..messages.len() - 1])?;
+                return Err(error);
+            }
         };
         let calls = match ai::providers::calls(&provider, &data) {
             Ok(calls) => calls,
@@ -268,6 +343,7 @@ pub(crate) async fn chat_notebook(
         });
         for call in calls {
             let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+            token.check()?;
             let id = format!(
                 "{}-{}-{}",
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
@@ -302,6 +378,19 @@ pub(crate) async fn chat_notebook(
             }
             results.push((call, result));
         }
+        {
+            let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+            token.check()?;
+            let mut received = messages.clone();
+            received.push(Message {
+                role: "assistant".into(),
+                content: token.text.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+                proposals: proposals.clone(),
+                tool_results: tool_results.clone(),
+                tool_pause: Some("generating".into()),
+            });
+            ai::save_history(&app, &dir, &received)?;
+        }
         if !proposals.is_empty() {
             reply = approval_reply(&provider, &data, proposals.len());
             tool_pause = Some("approval".into());
@@ -328,6 +417,8 @@ pub(crate) async fn chat_notebook(
         tool_pause,
         tool_results,
     });
+    let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+    token.check()?;
     ai::history::save(
         &app,
         &dir,
@@ -432,17 +523,23 @@ pub(crate) async fn apply_chat_proposal(
     id: String,
     editor: Option<ai::editor::EditorContext>,
     auto: Option<bool>,
+    turn_id: String,
+    begin: bool,
 ) -> Result<Value, String> {
-    if CHAT_BUSY.swap(true, Ordering::SeqCst) {
-        return Err("Wait for the current chat reply".into());
-    }
-    let _guard = ChatGuard;
+    let token = {
+        let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        TURNS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enter(&turn_id, &notebook, begin)?
+    };
     let auto = auto.unwrap_or(false);
     let policy = crate::config::settings(&app)?.auto_approve;
     let root = vault_dir(&app)?;
     let dir = notebook_dir(&root, &notebook)?;
     let external = {
         let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        token.check()?;
         let mut messages = ai::history(&app, &dir)?;
         let proposal = messages
             .iter_mut()
@@ -496,6 +593,7 @@ pub(crate) async fn apply_chat_proposal(
         if proposal.name == "mcp_call" {
             // Persist consumption before sending: a network failure does not prove a remote action failed.
             proposal.applied = true;
+            proposal.arguments["result"] = json!({"notice":"External action in progress; its outcome may be unknown if stopped. Check the server before retrying."});
             let external = proposal.clone();
             ai::save_history(&app, &dir, &messages)?;
             Some(external)
@@ -515,9 +613,10 @@ pub(crate) async fn apply_chat_proposal(
         }
     };
     let proposal = external.unwrap();
-    let result=crate::mcp::execute(&app,&proposal).await.unwrap_or_else(|error|json!({"error":error,"notice":"The remote action may have completed. Check the server before requesting another call."}));
+    let result=token.run(crate::mcp::execute(&app,&proposal)).await.unwrap_or_else(|error|json!({"error":error,"notice":"The remote action may have completed. Check the server before requesting another call."}));
     {
         let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        token.check()?;
         let mut messages = ai::history(&app, &dir)?;
         let proposal = messages
             .iter_mut()
@@ -581,6 +680,7 @@ pub(crate) fn resume_notebook_chat(
     let _guard = ChatGuard;
     {
         let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        TURNS.lock().unwrap_or_else(|e| e.into_inner()).invalidate();
         ai::history::resume(&app, &notebook_dir(&vault_dir(&app)?, &notebook)?, &id)?;
     }
     get_notebook_chat(app, notebook)
@@ -597,6 +697,7 @@ pub(crate) fn delete_notebook_chat(
     let _guard = ChatGuard;
     {
         let _write = VAULT_WRITES.lock().unwrap_or_else(|e| e.into_inner());
+        TURNS.lock().unwrap_or_else(|e| e.into_inner()).invalidate();
         ai::history::delete(&app, &notebook_dir(&vault_dir(&app)?, &notebook)?, &id)?;
     }
     get_notebook_chat(app, notebook)
