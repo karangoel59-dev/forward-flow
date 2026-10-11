@@ -51,7 +51,7 @@
       </section>
     <aside id="chat" class="chat-panel" aria-label="Notebook chat">
       <div class="chat-inner">
-        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><div class="chat-header-actions"><button id="chat-history" class="text-button" type="button">History</button><button id="chat-options" class="text-button" type="button" aria-expanded="false" aria-controls="chat-options-panel">Options</button><button id="chat-close" class="text-button" type="button">Hide chat</button></div></div>
+        <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><div class="chat-header-actions"><button id="chat-history" class="text-button" type="button">History</button><button id="chat-options" class="text-button" type="button" aria-expanded="false" aria-controls="chat-options-panel">Options</button><button id="chat-stop" class="text-button" type="button" aria-label="Stop or end chat">End chat</button><button id="chat-close" class="text-button" type="button">Hide chat</button></div></div>
         <details id="chat-options-panel" class="chat-settings"><summary>Purpose & connections</summary>
         <details class="chat-details"><summary>Notebook purpose</summary><label for="chat-purpose" class="hint">Guide the tone, goals, and kind of pages you want to create.</label><textarea id="chat-purpose" rows="3" placeholder="Help me develop practical ideas for my next project."></textarea><button id="chat-purpose-save" class="text-button" type="button">Save purpose</button></details>
         <details id="ai-settings" class="chat-details"><summary>AI connections</summary>
@@ -255,7 +255,7 @@
       <div class="action-review-selection"><label><input id="chat-select-all" type="checkbox" /> Select all pending actions</label><span id="chat-selection-count" class="hint"></span></div>
       <div id="chat-review-list"></div>
       <p id="chat-review-status" class="hint" role="status" aria-live="polite"></p>
-      <div class="action-review-footer"><button id="chat-approve-selected" class="ghost-btn" type="button" disabled>Approve selected</button></div>
+      <div class="action-review-footer"><button id="chat-review-stop" class="text-button" type="button" aria-label="Stop or end chat">End chat</button><button id="chat-approve-selected" class="ghost-btn" type="button" disabled>Approve selected</button></div>
     </dialog>
     <button id="conflict-banner" class="conflict-banner" type="button" hidden></button>
     <div id="hud" class="hint" role="status" aria-live="polite"></div>

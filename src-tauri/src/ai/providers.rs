@@ -470,6 +470,31 @@ mod tool_tests {
         }
     }
     #[test]
+    fn metadata_tool_schemas_reach_every_provider_with_external_discovery() {
+        let mut definitions = crate::ai::tools::definitions();
+        let servers = (0..2).map(|n| (format!("server{n}"), crate::mcp::Server {
+            id: format!("server{n}"), url: "https://example.com/mcp".into(),
+            enabled: true, token: String::new(), tools: (0..40).map(|i| crate::mcp::Tool {
+                name:format!("tool{i}"), description:String::new(), schema:json!({"type":"object"})
+            }).collect(),
+        })).collect();
+        definitions.extend(crate::mcp::definitions(&servers));
+        assert!(definitions.iter().any(|d| d["name"] == "mcp_discover_tools"));
+        for provider in ["openai", "azure_openai", "claude", "gemini"] {
+            let mut body = json!({});
+            attach_tools(provider, &mut body, &definitions);
+            let declarations = if provider == "gemini" { &body["tools"][0]["functionDeclarations"] } else { &body["tools"] };
+            for name in ["read_notebook_metadata", "update_notebook_metadata"] {
+                let d = declarations.as_array().unwrap().iter().find(|d| d["name"] == name).unwrap();
+                let schema = match provider { "claude" => &d["input_schema"], "gemini" => &d["parametersJsonSchema"], _ => &d["parameters"] };
+                let original = definitions.iter().find(|d| d["name"] == name).unwrap();
+                assert_eq!(schema, &original["parameters"]);
+                assert_eq!(schema["additionalProperties"], false);
+            }
+        }
+    }
+
+    #[test]
     fn each_provider_pairs_tool_calls_and_results() {
         let responses = [
             (

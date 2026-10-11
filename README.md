@@ -99,7 +99,7 @@ reopens it. Purpose, AI connections, and MCP servers are under **Purpose & conne
 
 ### Notebook tools
 
-All three providers can call tools during chat. Read, search, list, Git status,
+OpenAI, Azure OpenAI, Claude, and Gemini can call tools during chat. Read, search, list, Git status,
 and vault commit-history tools run immediately. Creating pages or child
 notebooks, moving pages into child notebooks, tags, links, revisions, deletions,
 and sync produce **proposals**. Review the arguments and original contents, then
@@ -114,6 +114,61 @@ vault commit summaries. Shell access and arbitrary Git operations require an
 external MCP server exposing those tools. Markdown tables work; chart rendering
 is not included yet.
 
+### Notebook metadata
+
+`read_notebook_metadata` takes no arguments and immediately returns the selected
+notebook name (empty for Inbox), `exists`, and `data`: the entire JSON object in
+`.notebook.json`, or `{}` when absent. Metadata returned by tools is source data,
+not instructions. Both metadata tools are advertised through the shared built-in
+tool definitions for every provider, including when external MCP discovery is
+active. They cannot select another notebook or follow a linked notebook folder.
+
+`update_notebook_metadata` proposes an update to that same file. Only these
+optional arguments are supported; supply at least one:
+
+- `purpose`: a string of at most 12,000 UTF-8 bytes. Replaces the purpose;
+  `""` clears it. Omission preserves it; null is invalid.
+- `metadata`: an object containing 1–50 user keys to patch. Values may be strings
+  (at most 4,000 UTF-8 bytes each), JSON numbers, or booleans. Null removes the
+  named key; removing a missing key does nothing. Objects and arrays are rejected.
+  Omitted keys are preserved. The resulting namespace may contain at most 50
+  keys and 16,000 bytes of compact serialized JSON.
+
+User keys contain 1–64 ASCII characters, start with a letter, and contain only
+letters, digits, `_`, and `-`. These names are reserved, case-insensitively:
+`__proto__`, `prototype`, `constructor`, `purpose`, `metadata`, `created`, `tags`,
+`links`, `path`, `filename`, `name`, `notebook`, `id`, `body`, and `content`.
+Keys never become file paths. All other top-level update arguments are rejected.
+
+Example proposal arguments:
+
+```json
+{"purpose":"Explore travel ideas","metadata":{"audience":"family","priority":2,"active":true,"obsolete":null}}
+```
+
+The sidecar must be a regular UTF-8 JSON file containing an object, with a string
+`purpose` if present, and is limited to 64,000 bytes. Missing files need no
+migration. Editing user metadata requires any existing `metadata` field to be
+an object. Unknown existing fields and untouched user values (including legacy
+nested values) are preserved semantically; JSON whitespace/order may change.
+The existing purpose save button also preserves these fields. Invalid, oversized,
+or linked sidecars are rejected without replacement.
+
+Updates show the proposed arguments and original sidecar in review. They require
+**Apply change**, unless the existing **Page changes** auto-approval preference is
+explicitly enabled. Approval revalidates values and notebook scope, and compares
+the exact original bytes and file existence. External edits, creation, or removal
+require a fresh proposal. Successful updates use the existing chat history,
+vault-write lock, Git recording, sync, and vault-refresh event. Saving uses a
+staged file and replacement; unrelated pages are never rewritten.
+
+Custom page metadata tools are deliberately not added: page frontmatter currently
+uses a small line-based format, not a general YAML parser. Existing manual custom
+fields remain supported, and tags and links keep their dedicated tools. Notebook
+metadata updates never alter page frontmatter, prose, filenames, or chat history
+fields. User metadata is available by inspection; it is not automatically added
+to the model's system prompt. Notebook purpose retains its existing chat meaning.
+
 ### Auto-approve actions
 
 By default every proposed change waits for **Apply change**. Under **Purpose &
@@ -122,7 +177,7 @@ soon as the model proposes them. Everything is off until you switch it on:
 
 | Switch | Covers | Can it be undone? |
 | --- | --- | --- |
-| Page changes | New pages and revisions, tags, links, notebooks, moves, sync | Yes, from the vault's Git history |
+| Page changes | New pages and revisions, tags, links, notebooks and notebook metadata, moves, sync | Yes, from the vault's Git history |
 | Draft changes | Replacing, clearing or saving the unsaved draft | A replaced or cleared draft is gone |
 | Deleting pages | Page deletions | Only from Git history, outside the app |
 | External MCP tools | Calls to connected MCP servers | No |
@@ -200,6 +255,29 @@ complete provider response and still require approval. Interrupted replies
 retain received text with an explicit notice and a **Continue** option;
 incomplete tool arguments are never executed. If no text arrived, the composer
 keeps your question ready to retry.
+
+
+**Stop** stays available in the chat header and the approval dialog during
+streaming, tool work, and auto-approval. When idle it reads **End chat**. It
+invalidates the current turn, stops queued approved actions and automatic
+continuations, and cancels pending provider and MCP requests by dropping their
+local request futures. Received text, completed tool results, proposals and
+history are retained with an explicit **Chat stopped** state, including when
+reopening the conversation. Incomplete tool calls are not executed. Send an
+explicit new message to begin another turn, or choose **New conversation**;
+ending a chat does not delete its history. **Hide chat** only hides the panel.
+
+Cancellation is best effort: providers or remote tools may continue processing
+a request already sent. An external proposal is marked attempted before sending
+and retains an unknown-outcome notice if stopped; check the server before
+requesting the action again. Stop cannot undo completed external side effects,
+page writes, editor changes already applied, or sync work already launched.
+A synchronous local action may finish before Stop can persist its state, but
+remaining queued actions will not run. Late responses cannot overwrite stopped
+history or a newly opened conversation. If backend cancellation cannot be
+confirmed, chat shows an error and stops its local automatic queue; already
+started backend work may still finish. Stop state and received text are saved
+when Stop completes; a process crash before that may leave the last checkpoint.
 
 ## Notebooks
 

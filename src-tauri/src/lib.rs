@@ -64,6 +64,7 @@ pub fn run() {
             commands::chat::set_notebook_purpose,
             commands::chat::clear_notebook_chat,
             commands::chat::chat_notebook,
+            commands::chat::stop_notebook_chat,
             commands::chat::apply_chat_proposal,
             commands::chat::get_auto_approve,
             commands::chat::set_auto_approve,

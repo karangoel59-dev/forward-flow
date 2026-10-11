@@ -121,3 +121,162 @@ fn notebook_purpose_round_trips_without_becoming_a_page() {
     assert!(write_purpose(&root, &"x".repeat(12_001)).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn metadata_patches_and_purpose_button_preserve_unknown_values() {
+    let root = notebook_vault("metadata-roundtrip");
+    let original = serde_json::json!({"purpose":"old", "extension":{"nested":[1,2]},
+        "metadata":{"audience":"me","legacy":{"nested":true},"remove":"gone"}});
+    fs::write(root.join(".notebook.json"), original.to_string()).unwrap();
+    write_purpose(&root, "new").unwrap();
+    let (_, data) = read_metadata(&root).unwrap();
+    assert_eq!(data["extension"], original["extension"]);
+    assert_eq!(data["metadata"], original["metadata"]);
+    let updated = updated_metadata(
+        &data,
+        &serde_json::json!({"metadata":{
+        "remove":null,"missing":null,"priority":2,"active":false,"audience":"us"}}),
+    )
+    .unwrap();
+    write_metadata(&root, &updated).unwrap();
+    let (_, reread) = read_metadata(&root).unwrap();
+    assert_eq!(reread, updated);
+    assert_eq!(reread["metadata"]["legacy"], original["metadata"]["legacy"]);
+    assert!(reread["metadata"].get("remove").is_none());
+    assert_eq!(read_purpose(&root).unwrap(), "new");
+    assert!(collect_entries(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn metadata_validates_types_names_and_byte_limits() {
+    use serde_json::json;
+    let empty = json!({});
+    for patch in [
+        json!({}),
+        json!([]),
+        json!({"purpose":null}),
+        json!({"purpose":42}),
+        json!({"purpose":"é".repeat(6001)}),
+        json!({"tags":[]}),
+        json!({"metadata":null}),
+        json!({"metadata":{}}),
+        json!({"metadata":{"ok":[]}}),
+        json!({"metadata":{"ok":{"constructor":1}}}),
+        json!({"metadata":{"ok":"x".repeat(4001)}}),
+    ] {
+        assert!(updated_metadata(&empty, &patch).is_err(), "{patch}");
+    }
+    for key in [
+        "",
+        "__proto__",
+        "Constructor",
+        "prototype",
+        "purpose",
+        "tags",
+        "links",
+        "created",
+        "path",
+        "filename",
+        "name",
+        "notebook",
+        "id",
+        "body",
+        "content",
+        "metadata",
+        "../escape",
+        "a/b",
+        "a\\b",
+        "a.b",
+        "1key",
+        "é",
+        "a\n",
+    ] {
+        assert!(
+            updated_metadata(&empty, &json!({"metadata":{key:1}})).is_err(),
+            "{key}"
+        );
+    }
+    assert!(updated_metadata(&empty, &json!({"metadata":{"a".repeat(65):1}})).is_err());
+    let values: serde_json::Map<_, _> = (0..51).map(|n| (format!("key{n}"), json!(true))).collect();
+    assert!(updated_metadata(&empty, &json!({"metadata":values})).is_err());
+    let values: serde_json::Map<_, _> = (0..4)
+        .map(|n| (format!("key{n}"), json!("x".repeat(4000))))
+        .collect();
+    assert!(updated_metadata(&empty, &json!({"metadata":values})).is_err());
+    assert!(updated_metadata(
+        &json!({"unknown":"x".repeat(64000)}),
+        &json!({"purpose":""})
+    )
+    .is_err());
+    assert!(updated_metadata(&json!({"metadata":42}), &json!({"metadata":{"safe":true}})).is_err());
+    assert!(updated_metadata(&json!({"metadata":42}), &json!({"purpose":""})).is_ok());
+    assert!(updated_metadata(
+        &empty,
+        &json!({"purpose":"x".repeat(12000),"metadata":{
+        "A_1-key":"x".repeat(4000),"number":1.5,"flag":true}})
+    )
+    .is_ok());
+}
+
+#[test]
+fn malformed_or_oversized_sidecars_are_never_overwritten() {
+    let root = notebook_vault("metadata-invalid-file");
+    for raw in [
+        "[]".to_owned(),
+        "null".into(),
+        "{broken".into(),
+        "{\"purpose\":42}".into(),
+        "x".repeat(64001),
+    ] {
+        fs::write(root.join(".notebook.json"), &raw).unwrap();
+        assert!(read_metadata(&root).is_err());
+        assert!(write_purpose(&root, "valid").is_err());
+        assert_eq!(
+            fs::read_to_string(root.join(".notebook.json")).unwrap(),
+            raw
+        );
+    }
+    fs::remove_file(root.join(".notebook.json")).unwrap();
+    fs::create_dir(root.join(".notebook.json")).unwrap();
+    assert!(read_metadata(&root).is_err());
+    assert!(write_purpose(&root, "valid").is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn metadata_does_not_follow_sidecar_symlinks_even_when_dangling() {
+    let root = notebook_vault("metadata-symlink");
+    let outside = notebook_vault("metadata-symlink-outside");
+    let target = outside.join("data.json");
+    std::os::unix::fs::symlink(&target, root.join(".notebook.json")).unwrap();
+    assert!(read_metadata(&root).is_err());
+    assert!(write_purpose(&root, "valid").is_err());
+    assert!(!target.exists());
+    fs::write(&target, "{\"purpose\":\"outside\"}").unwrap();
+    assert!(write_purpose(&root, "valid").is_err());
+    assert_eq!(
+        fs::read_to_string(target).unwrap(),
+        "{\"purpose\":\"outside\"}"
+    );
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn missing_metadata_inspection_is_read_only_and_empty_purpose_clears() {
+    let root = notebook_vault("metadata-empty");
+    assert_eq!(read_metadata(&root).unwrap(), (None, serde_json::json!({})));
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+    write_purpose(&root, "old").unwrap();
+    write_purpose(&root, "").unwrap();
+    assert_eq!(
+        read_metadata(&root).unwrap().1,
+        serde_json::json!({"purpose":""})
+    );
+    fs::write(root.join(".notebook.json"), [0xff, 0xfe]).unwrap();
+    assert!(write_purpose(&root, "new").is_err());
+    assert_eq!(fs::read(root.join(".notebook.json")).unwrap(), [0xff, 0xfe]);
+    fs::remove_dir_all(root).unwrap();
+}
