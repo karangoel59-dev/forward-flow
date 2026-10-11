@@ -269,6 +269,29 @@ pub fn pull_and_merge(dir: &Path) -> Result<bool, String> {
     }
 }
 
+/// Fetches the current branch so `FETCH_HEAD` names the remote's latest commit.
+/// Returns Ok(false) when there is no remote or the remote has no such branch yet.
+pub fn fetch(dir: &Path) -> Result<bool, String> {
+    let Some(remote) = remote_name(dir) else {
+        return Ok(false);
+    };
+    let Ok(branch) = ok(dir, &["symbolic-ref", "--short", "HEAD"]) else {
+        return Ok(false);
+    };
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match ok(dir, &["fetch", "--quiet", remote.as_str(), branch.trim()]) {
+        Ok(_) => Ok(true),
+        Err(e) if e.contains("couldn't find remote ref") || e.contains("no such ref") => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Runs `work` while no other commit, pull or branch update can touch the repository.
+pub fn locked<T>(work: impl FnOnce() -> T) -> T {
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    work()
+}
+
 /// Synchronizes git branches for active tags:
 /// - Creates/updates branch `tag/<tag>` at HEAD for each tag in `active_tags` and pushes it to remote.
 /// - Deletes any local and remote branch `tag/<tag>` whose tag is not in `active_tags`.

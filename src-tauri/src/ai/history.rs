@@ -207,6 +207,26 @@ pub(crate) fn resume(app: &AppHandle, notebook: &PathBuf, id: &str) -> Result<()
     select(&mut store, id)?;
     persist(&path, &store)
 }
+fn remove(store: &mut Store, id: &str) -> Result<(), String> {
+    let before = store.conversations.len();
+    store.conversations.retain(|c| c.id != id);
+    if store.conversations.len() == before {
+        return Err("Conversation not found in this notebook".into());
+    }
+    // Deleting the open conversation leaves a fresh one in its place.
+    if store.active == id {
+        let fresh = new_id();
+        store.conversations.push(conversation(fresh.clone(), vec![]));
+        store.active = fresh;
+    }
+    Ok(())
+}
+pub(crate) fn delete(app: &AppHandle, notebook: &PathBuf, id: &str) -> Result<(), String> {
+    let path = location(app, notebook)?;
+    let mut store = load(&path)?;
+    remove(&mut store, id)?;
+    persist(&path, &store)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +257,29 @@ mod tests {
         persist(&path, &loaded).unwrap();
         assert_eq!(load(&path).unwrap().active, "legacy");
         fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn deleting_removes_one_conversation_and_replaces_the_open_one() {
+        let message = |text: &str| -> Message {
+            serde_json::from_value(json!({"role":"user","content":text})).unwrap()
+        };
+        let mut store = Store {
+            version: 1,
+            active: "b".into(),
+            conversations: vec![
+                conversation("a".into(), vec![message("First")]),
+                conversation("b".into(), vec![message("Second")]),
+            ],
+        };
+        assert!(remove(&mut store, "missing").is_err());
+        assert_eq!(store.conversations.len(), 2);
+        remove(&mut store, "a").unwrap();
+        assert_eq!(store.active, "b");
+        assert_eq!(store.conversations.len(), 1);
+        remove(&mut store, "b").unwrap();
+        assert_eq!(store.conversations.len(), 1);
+        assert_ne!(store.active, "b");
+        assert!(store.conversations[0].messages.is_empty());
+        assert_eq!(store.conversations[0].id, store.active);
     }
 }

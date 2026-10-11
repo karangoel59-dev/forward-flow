@@ -3,10 +3,13 @@ use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager};
 
+pub(crate) mod approval;
+pub(crate) mod context;
 pub(crate) mod editor;
 pub(crate) mod history;
 pub(crate) mod models;
 pub(crate) mod providers;
+pub(crate) mod streaming;
 pub(crate) mod tools;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -165,6 +168,18 @@ pub(crate) async fn exchange(
     url: &str,
     body: &Value,
 ) -> Result<Value, String> {
+    response(connection, url, body)
+        .await?
+        .json()
+        .await
+        .map_err(|_| "Provider returned an invalid response".into())
+}
+
+async fn response(
+    connection: &Connection,
+    url: &str,
+    body: &Value,
+) -> Result<reqwest::Response, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::none())
@@ -190,11 +205,7 @@ pub(crate) async fn exchange(
     if !status.is_success() {
         return Err(providers::http_error(connection, status.as_u16()));
     }
-    let data: Value = response
-        .json()
-        .await
-        .map_err(|_| "Provider returned an invalid response")?;
-    Ok(data)
+    Ok(response)
 }
 
 pub(crate) fn validate_messages(messages: &[Message]) -> Result<(), String> {

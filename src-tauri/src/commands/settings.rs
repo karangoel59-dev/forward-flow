@@ -14,6 +14,9 @@ struct PortableConfig {
     version: u32,
     #[serde(default, skip_serializing)]
     vault: Option<String>,
+    /// Present in a device's own config.json; read so that file imports, then discarded.
+    #[serde(default, skip_serializing)]
+    auto_approve: serde_json::Value,
     #[serde(default)]
     git: GitSettings,
     #[serde(default)]
@@ -28,6 +31,8 @@ fn parse(text: &str) -> Result<PortableConfig, String> {
     let mut cfg: PortableConfig = serde_json::from_str(text)
         .map_err(|_| "Invalid config file. Use the Forward Flow JSON format.")?;
     cfg.vault = None;
+    // Running actions unreviewed must be chosen on each device, never switched on by a file.
+    cfg.auto_approve = serde_json::Value::Null;
     if cfg.version != 1 {
         return Err("Unsupported config version".into());
     }
@@ -80,6 +85,7 @@ fn portable(cfg: config::Config, include_secrets: bool) -> PortableConfig {
     let mut result = PortableConfig {
         version: 1,
         vault: None,
+        auto_approve: serde_json::Value::Null,
         git: cfg.git,
         models: cfg.models,
         mcp_servers: cfg.mcp_servers,
@@ -228,8 +234,12 @@ mod tests {
         assert_eq!(parse(example).unwrap().models.len(), 3);
         let mut device = config::Config::default();
         device.vault = Some("/another/device/vault".into());
+        let exported = serde_json::to_string(&portable(device.clone(), true)).unwrap();
+        assert!(!exported.contains("auto_approve"), "auto-approval never travels between devices");
+        device.auto_approve.external = true;
         let imported = parse(&serde_json::to_string(&device).unwrap()).unwrap();
         assert!(imported.vault.is_none());
+        assert!(imported.auto_approve.is_null());
     }
     #[test]
     fn export_excludes_device_paths_and_secrets_unless_requested() {

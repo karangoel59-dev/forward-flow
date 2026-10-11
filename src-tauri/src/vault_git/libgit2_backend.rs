@@ -324,8 +324,7 @@ fn push_once(repo: &Repository, remote_name: &str, branch: &str) -> Attempt {
     }
 }
 
-/// Fetches and fast-forwards or merges the remote branch.
-fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), String> {
+fn fetch_branch(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), String> {
     let mut remote = repo.find_remote(remote_name).map_err(msg)?;
     let url = remote.url().unwrap_or("").to_string();
     let mut callbacks = RemoteCallbacks::new();
@@ -335,8 +334,37 @@ fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Resu
     }
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
-    remote.fetch(&[branch], Some(&mut fetch_opts), None).map_err(msg)?;
-    drop(remote);
+    remote.fetch(&[branch], Some(&mut fetch_opts), None).map_err(msg)
+}
+
+/// Fetches the current branch so `FETCH_HEAD` names the remote's latest commit.
+/// Returns Ok(false) when there is no remote or the remote has no such branch yet.
+pub fn fetch(dir: &Path) -> Result<bool, String> {
+    ensure_ca_bundle(dir)?;
+    let repo = Repository::open(dir).map_err(msg)?;
+    let Some(remote) = remote_name(&repo) else {
+        return Ok(false);
+    };
+    let Some(branch) = repo.head().ok().and_then(|h| h.shorthand().map(String::from)) else {
+        return Ok(false);
+    };
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    match fetch_branch(&repo, &remote, &branch) {
+        Ok(()) => Ok(true),
+        Err(e) if e.contains("could not find") => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Runs `work` while no other commit, merge or branch update can touch the repository.
+pub fn locked<T>(work: impl FnOnce() -> T) -> T {
+    let _guard = COMMIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    work()
+}
+
+/// Fetches and fast-forwards or merges the remote branch.
+fn merge_from_remote(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), String> {
+    fetch_branch(repo, remote_name, branch)?;
 
     let fetch_head = repo.find_reference("FETCH_HEAD").map_err(msg)?;
     let fetch_commit = repo.reference_to_annotated_commit(&fetch_head).map_err(msg)?;

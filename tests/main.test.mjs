@@ -49,6 +49,7 @@ function frontend(invoke, chatOpen = async () => true, compact = false) {
     listen: () => Promise.resolve(),
     invoke,
     setupSettings: () => {},
+    setupConflicts: () => ({ review: async () => true, flag() {}, clear() {} }),
     setupChat: () => ({open: chatOpen}),
     renderMarkdown: body => body,
     externalMarkdownUrl: () => null,
@@ -244,4 +245,98 @@ test('mobile navigation shows one workspace and keeps editor and conversation wh
   assert.equal(app.editor.value,'My unsaved draft');
   await app.run('openNotebookChat("Ideas")');
   assert.deepEqual(opened,['','Ideas'],'reopening the same chat must preserve its state');
+});
+
+const pages = `[
+  {path:'a.md',name:'2026-01-01-000000',notebook:'',created:'x',words:300,preview:'opening lines',tags:[],links:[]},
+  {path:'b.md',name:'2026-01-02-000000',notebook:'',created:'x',words:4,preview:'something else',tags:['heron'],links:[]},
+]`;
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('page search adds matches from entry prose and shows where they were found', async () => {
+  const queries = [];
+  const app = frontend(async (command, args) => {
+    if (command === 'search_entries') { queries.push(args.query); return [{path:'a.md',snippet:'…the heron landed quietly…'}]; }
+  });
+  app.run(`entries = ${pages}; mode = 'picker'; pickerNotebook.value = '*'; pickerFilter.value = 'Landed'; renderPicker(); scheduleBodySearch()`);
+  assert.equal(app.run('shown.length'), 0, 'the preview alone does not match');
+  app.flushTimers();
+  await settle();
+  assert.deepEqual(queries, ['landed']);
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'a.md');
+  assert.equal(app.element('picker-list').children[0].children[1].textContent, '…the heron landed quietly…');
+
+  app.run(`pickerFilter.value = '#heron'; scheduleBodySearch(); renderPicker()`);
+  assert.equal(app.timerCount(), 0, 'tag filters stay local');
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'b.md');
+});
+
+test('a slow answer to an earlier search cannot replace newer results', async () => {
+  const answers = [];
+  const app = frontend((command) => command === 'search_entries' ? new Promise(resolve => answers.push(resolve)) : Promise.resolve());
+  app.run(`entries = ${pages}; mode = 'picker'; pickerNotebook.value = '*'; pickerFilter.value = 'landed'; scheduleBodySearch()`);
+  app.flushTimers();
+  app.run(`pickerFilter.value = 'opening'; renderPicker(); scheduleBodySearch()`);
+  answers[0]([{path:'b.md',snippet:'stale'}]);
+  await settle();
+  assert.equal(app.run('shown.map(e => e.path).join()'), 'a.md');
+  assert.equal(app.element('picker-list').children[0].children[1].textContent, 'opening lines');
+});
+
+test('clear draft takes a second tap, empties the saved draft, and can be undone', async () => {
+  const saved = [];
+  const app = frontend(async (command, args) => { if (command === 'save_draft') saved.push(args.content); });
+  const button = app.element('write-clear');
+  app.run('updateLiveCount()');
+  assert.equal(button.hidden, true, 'nothing to clear on an empty page');
+  app.editor.value = 'a long draft';
+  app.run('updateLiveCount()');
+  assert.equal(button.hidden, false);
+
+  app.run('clearDraft()');
+  assert.equal(app.editor.value, 'a long draft');
+  assert.equal(button.textContent, 'Tap again to clear');
+  const revision = app.run('editorRevision');
+  app.run('clearDraft()');
+  assert.equal(app.editor.value, '');
+  assert.deepEqual(saved, ['']);
+  assert.equal(button.textContent, 'Undo clear');
+  assert.equal(button.hidden, false);
+  assert.ok(app.run('editorRevision') > revision, 'pending chat edits to the old draft go stale');
+
+  app.run('clearDraft()');
+  assert.equal(app.editor.value, 'a long draft');
+  assert.deepEqual(saved, ['', 'a long draft']);
+  assert.equal(button.textContent, 'Clear draft');
+});
+
+test('an unconfirmed clear disarms, and writing or saving gives up the undo', async () => {
+  const app = frontend(async () => ({ words: 1 }));
+  const button = app.element('write-clear');
+  app.editor.value = 'draft';
+  app.run('clearDraft()');
+  app.flushTimers();
+  assert.equal(button.textContent, 'Clear draft');
+  assert.equal(app.editor.value, 'draft');
+
+  app.run('clearDraft(); clearDraft()');
+  app.editor.value = 'something new';
+  app.run('draftTyped()');
+  assert.equal(button.textContent, 'Clear draft');
+  app.run('clearDraft()');
+  assert.equal(app.editor.value, 'something new', 'the first tap only arms again');
+
+  app.run('resetClearDraft(); clearDraft(); clearDraft()');
+  app.flushTimers();
+  assert.equal(button.hidden, true, 'undo expires');
+  assert.equal(app.editor.value, '');
+});
+
+test('the draft cannot be cleared while it is being saved or edited by chat', async () => {
+  const app = frontend(async () => {});
+  app.editor.value = 'draft';
+  for (const flag of ['committing', 'editorToolBusy']) {
+    app.run(`${flag} = true; clearDraft(); clearDraft(); ${flag} = false`);
+    assert.equal(app.editor.value, 'draft');
+  }
 });

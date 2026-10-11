@@ -1,5 +1,6 @@
 import { setupSettings } from "./settings";
 import { setupChat } from "./chat";
+import { setupConflicts } from "./conflicts";
 import { renderMarkdown, externalMarkdownUrl } from "./markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,7 +29,7 @@ type EntryMeta = {
 };
 
 type EntryFull = { meta: EntryMeta; body: string; related: EntryMeta[] };
-type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook";
+type Mode = "setup" | "write" | "reader" | "picker" | "remote" | "notebook" | "conflict";
 type Sort = "new" | "old" | "long" | "linked";
 
 const SORTS: Sort[] = ["new", "old", "long", "linked"];
@@ -45,6 +46,7 @@ const setup = el<HTMLElement>("setup");
 const writeView = el<HTMLElement>("write");
 const editor = el<HTMLTextAreaElement>("editor");
 const writeCount = el<HTMLElement>("write-count");
+const clearDraftButton = el<HTMLButtonElement>("write-clear");
 
 const reader = el<HTMLElement>("reader");
 const readerDate = el<HTMLElement>("reader-date");
@@ -71,6 +73,7 @@ const touchResync = el<HTMLButtonElement>("touch-resync");
 const touchDelete = el<HTMLButtonElement>("touch-delete");
 const remoteSyncNow = el<HTMLButtonElement>("remote-sync-now");
 
+const conflictView = el<HTMLElement>("conflict");
 const notebookView = el<HTMLElement>("notebook");
 const notebookName = el<HTMLInputElement>("notebook-name");
 const notebookError = el<HTMLElement>("notebook-error");
@@ -149,6 +152,10 @@ async function moveCurrentEntry() {
 
 let editorRevision = 0;
 let editorToolBusy = false;
+// A draft has no history, so clearing takes a second tap and can be undone for a few seconds.
+let clearArmed = false;
+let clearedDraft: string | null = null;
+let clearTimer = 0;
 editor.addEventListener("input", () => { editorRevision++; });
 let chatNotebook: string | null = null;
 let chatVisible = true;
@@ -196,6 +203,7 @@ const chatController = setupChat(closeChat, message => hud(message, 5000), {
   },
   unlock: () => { editorToolBusy = false; editor.readOnly = false; writeNotebook.disabled = false; scheduleDraftSave(); },
   replace: async content => {
+    resetClearDraft();
     editor.value = content; editorRevision++; updateLiveCount(); scheduleFit(true);
     await invoke("save_draft", {content}).catch(e => hud(`Draft updated; local save will retry: ${String(e)}`, 5000));
   },
@@ -258,7 +266,63 @@ function countWords(str: string): number {
   return matches ? matches.length : 0;
 }
 
+function updateClearDraft() {
+  clearDraftButton.hidden = !editor.value.trim() && clearedDraft === null;
+  clearDraftButton.textContent = clearedDraft !== null ? "Undo clear" : clearArmed ? "Tap again to clear" : "Clear draft";
+}
+
+function resetClearDraft() {
+  clearArmed = false;
+  clearedDraft = null;
+  clearTimeout(clearTimer);
+  updateClearDraft();
+}
+
+function setDraft(content: string) {
+  editor.value = content;
+  // Chat proposals made against the old draft must not apply to the new one.
+  editorRevision++;
+  prevTextLength = 0;
+  clearTimeout(draftTimer);
+  invoke("save_draft", { content }).catch(() => {});
+  updateLiveCount();
+  scheduleFit(true);
+}
+
+function clearDraft() {
+  if (committing || editorToolBusy) return;
+  clearTimeout(clearTimer);
+  if (clearedDraft !== null) {
+    const restored = clearedDraft;
+    clearedDraft = null;
+    setDraft(restored);
+    hud("draft restored");
+    return;
+  }
+  if (!editor.value.trim()) return;
+  if (!clearArmed) {
+    clearArmed = true;
+    updateClearDraft();
+    clearTimer = window.setTimeout(resetClearDraft, 3000);
+    return;
+  }
+  clearArmed = false;
+  clearedDraft = editor.value;
+  setDraft("");
+  hud("draft cleared · undo for a few seconds", 4000);
+  clearTimer = window.setTimeout(resetClearDraft, 8000);
+}
+
+/** New writing replaces whatever a clear could have restored. */
+function draftTyped() {
+  if (clearArmed || clearedDraft !== null) resetClearDraft();
+  updateLiveCount();
+  scheduleFit();
+  scheduleDraftSave();
+}
+
 function updateLiveCount() {
+  updateClearDraft();
   const text = editor.value.trim();
   if (!text) {
     writeCount.hidden = true;
@@ -361,6 +425,7 @@ function show(next: Mode) {
   picker.hidden = next !== "picker";
   remoteView.hidden = next !== "remote";
   notebookView.hidden = next !== "notebook";
+  conflictView.hidden = next !== "conflict";
   updateNavigation();
   writeView.style.visibility = next === "write" ? "visible" : "hidden";
 
@@ -388,12 +453,22 @@ function formatDate(raw: string) {
 
 // sync
 
-type SyncStatus = { state: "synced" | "offline" | "error"; detail: string };
+type SyncStatus = { state: "synced" | "quiet" | "offline" | "conflict" | "error"; detail: string };
+
+let conflictOrigin: Mode = "write";
+const conflicts = setupConflicts(
+  text => hud(text, 5000),
+  () => { if (mode !== "conflict") { conflictOrigin = mode === "setup" || mode === "notebook" ? "write" : mode; show("conflict"); } },
+  () => { if (mode === "conflict") { conflictOrigin === "picker" ? void openPicker() : show(conflictOrigin); } },
+);
 
 listen<SyncStatus>("sync-status", (event) => {
   const { state, detail } = event.payload;
+  if (state === "synced" || state === "quiet") conflicts.clear();
   if (state === "synced") hud("synced");
+  else if (state === "quiet") return;
   else if (state === "offline") hud("offline · will sync on the next save", 3600);
+  else if (state === "conflict") conflicts.flag(Number(detail) || 1);
   else hud(`sync failed · ${detail.slice(0, 90)}`, 6000);
 }).catch(() => {
   /* not running inside the app shell; nothing to report */
@@ -441,6 +516,7 @@ async function commit() {
   clearTimeout(draftTimer);
   try {
     const meta = await invoke<EntryMeta>("commit_entry", { content: editor.value, notebook: writeNotebook.value });
+    resetClearDraft();
     editor.classList.add("committing");
     window.setTimeout(() => {
       editor.value = "";
@@ -674,8 +750,37 @@ function sortEntries(list: EntryMeta[]): EntryMeta[] {
   }
 }
 
+// The filter narrows instantly on dates, previews and tags; prose matches arrive from the backend.
+type SearchHit = { path: string; snippet: string };
+let bodyHits = new Map<string, string>();
+let bodyQuery = "";
+let searchTimer = 0;
+
+function scheduleBodySearch() {
+  const query = pickerFilter.value.trim().toLowerCase();
+  clearTimeout(searchTimer);
+  if (!query || query.startsWith("#")) {
+    bodyHits = new Map();
+    bodyQuery = "";
+    return;
+  }
+  searchTimer = window.setTimeout(async () => {
+    try {
+      const hits = await invoke<SearchHit[]>("search_entries", { query });
+      // A slower answer to an earlier query must not replace newer results.
+      if (pickerFilter.value.trim().toLowerCase() !== query) return;
+      bodyHits = new Map(hits.map((hit) => [hit.path, hit.snippet]));
+      bodyQuery = query;
+      if (mode === "picker") renderPicker();
+    } catch {
+      /* the quick filter still works */
+    }
+  }, 180);
+}
+
 function renderPicker() {
   const raw = pickerFilter.value.trim().toLowerCase();
+  const prose = bodyQuery === raw ? bodyHits : null;
   let pool = entries;
 
   pickerNotebook.disabled = !!linkFor;
@@ -691,7 +796,7 @@ function renderPicker() {
       : pool.filter((e) => e.tags.length > 0);
   } else if (raw) {
     pool = pool.filter((e) =>
-      `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(raw),
+      `${e.name} ${e.preview} ${e.tags.join(" ")}`.toLowerCase().includes(raw) || prose?.has(e.path),
     );
   }
 
@@ -727,7 +832,9 @@ function renderPicker() {
 
     const preview = document.createElement("div");
     preview.className = "row-preview";
-    preview.textContent = entry.preview || "—";
+    // Show where the words were found when they are past the opening lines.
+    const snippet = entry.preview.toLowerCase().includes(raw) ? undefined : prose?.get(entry.path);
+    preview.textContent = snippet || entry.preview || "—";
     const notebook = document.createElement("div");
     notebook.className = "row-notebook hint";
     notebook.textContent = entry.notebook || "Inbox";
@@ -763,6 +870,7 @@ async function openPicker() {
   pickerHead.hidden = !linkFor;
   pickerHead.textContent = linkFor ? "Link to which entry?" : "";
   pickerFilter.value = "";
+  scheduleBodySearch();
   cursor = 0;
   renderPicker();
   show("picker");
@@ -916,7 +1024,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (mode === "setup" || mode === "remote") return;
+  if (mode === "setup" || mode === "remote" || mode === "conflict") return;
 
   if (mod && e.key.toLowerCase() === "o") {
     e.preventDefault();
@@ -1018,15 +1126,13 @@ editor.addEventListener("keydown", (e) => {
   }
 });
 
-editor.addEventListener("input", () => {
-  updateLiveCount();
-  scheduleFit();
-  scheduleDraftSave();
-});
+editor.addEventListener("input", draftTyped);
+clearDraftButton.addEventListener("click", clearDraft);
 
 pickerFilter.addEventListener("input", () => {
   cursor = 0;
   renderPicker();
+  scheduleBodySearch();
 });
 
 readerBody.addEventListener("click", (event) => {
