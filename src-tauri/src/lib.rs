@@ -31,6 +31,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::import_settings,
             commands::settings::export_settings,
+            commands::settings::get_chat_enabled,
+            commands::settings::set_chat_enabled,
             commands::vault::get_vault,
             commands::vault::set_vault,
             commands::vault::get_remote,

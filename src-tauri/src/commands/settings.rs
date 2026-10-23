@@ -17,6 +17,9 @@ struct PortableConfig {
     /// Present in a device's own config.json; read so that file imports, then discarded.
     #[serde(default, skip_serializing)]
     auto_approve: serde_json::Value,
+    /// Also device-only: read so a device's own config.json imports, then discarded.
+    #[serde(default, skip_serializing)]
+    chat_enabled: serde_json::Value,
     #[serde(default)]
     git: GitSettings,
     #[serde(default)]
@@ -33,6 +36,8 @@ fn parse(text: &str) -> Result<PortableConfig, String> {
     cfg.vault = None;
     // Running actions unreviewed must be chosen on each device, never switched on by a file.
     cfg.auto_approve = serde_json::Value::Null;
+    // Chat stays off until it is switched on here, never by a file.
+    cfg.chat_enabled = serde_json::Value::Null;
     if cfg.version != 1 {
         return Err("Unsupported config version".into());
     }
@@ -86,6 +91,7 @@ fn portable(cfg: config::Config, include_secrets: bool) -> PortableConfig {
         version: 1,
         vault: None,
         auto_approve: serde_json::Value::Null,
+        chat_enabled: serde_json::Value::Null,
         git: cfg.git,
         models: cfg.models,
         mcp_servers: cfg.mcp_servers,
@@ -193,6 +199,19 @@ pub(crate) fn import_settings(app: AppHandle, text: String) -> Result<String, St
     Ok("Config imported. Connect / refresh new MCP servers to discover tools. No sync was started.".into())
 }
 
+#[tauri::command]
+pub(crate) fn get_chat_enabled(app: AppHandle) -> Result<bool, String> {
+    Ok(config::settings(&app)?.chat_enabled)
+}
+#[tauri::command]
+pub(crate) fn set_chat_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    config::update(&app, |cfg| {
+        cfg.chat_enabled = enabled;
+        Ok(())
+    })?;
+    Ok(enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,10 +255,14 @@ mod tests {
         device.vault = Some("/another/device/vault".into());
         let exported = serde_json::to_string(&portable(device.clone(), true)).unwrap();
         assert!(!exported.contains("auto_approve"), "auto-approval never travels between devices");
+        assert!(!exported.contains("chat_enabled"), "switching chat on never travels between devices");
+        assert!(!device.chat_enabled, "chat is off until a device switches it on");
         device.auto_approve.external = true;
+        device.chat_enabled = true;
         let imported = parse(&serde_json::to_string(&device).unwrap()).unwrap();
         assert!(imported.vault.is_none());
         assert!(imported.auto_approve.is_null());
+        assert!(imported.chat_enabled.is_null());
     }
     #[test]
     fn export_excludes_device_paths_and_secrets_unless_requested() {

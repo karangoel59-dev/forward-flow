@@ -14,6 +14,8 @@ pub(crate) struct Config {
     pub(crate) mcp_servers: BTreeMap<String, Server>,
     /// A choice for this device only; it is never part of a portable config.
     pub(crate) auto_approve: crate::ai::approval::AutoApprove,
+    /// Chat is off until this device switches it on; never part of a portable config.
+    pub(crate) chat_enabled: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -24,6 +26,7 @@ impl Default for Config {
             models: BTreeMap::new(),
             mcp_servers: BTreeMap::new(),
             auto_approve: Default::default(),
+            chat_enabled: false,
         }
     }
 }

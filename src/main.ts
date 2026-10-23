@@ -158,13 +158,17 @@ let clearedDraft: string | null = null;
 let clearTimer = 0;
 editor.addEventListener("input", () => { editorRevision++; });
 let chatNotebook: string | null = null;
-let chatVisible = true;
+let chatVisible = false;
+/// Chat is off until this device switches it on, leaving write, pages and settings.
+let chatEnabled = false;
 let workspacePane: "write" | "chat" = "write";
 const compactLayout = window.matchMedia("(max-width: 900px)");
 function updateNavigation() {
   const compact = compactLayout.matches;
   el<HTMLElement>("writing-pane").hidden = compact && workspacePane === "chat";
-  el<HTMLElement>("chat").hidden = compact ? workspacePane !== "chat" : !chatVisible;
+  el<HTMLElement>("chat").hidden = !chatEnabled || (compact ? workspacePane !== "chat" : !chatVisible);
+  el<HTMLButtonElement>("nav-chat").hidden = !chatEnabled;
+  el<HTMLButtonElement>("write-chat").hidden = !chatEnabled;
   writeView.setAttribute("data-pane", workspacePane);
   el<HTMLElement>("workspace-nav").hidden = !["write", "picker", "reader", "remote"].includes(mode);
   for (const [id, active] of [["nav-write", mode === "write" && workspacePane === "write"], ["nav-chat", mode === "write" && workspacePane === "chat"], ["nav-pages", mode === "picker" || mode === "reader"], ["nav-settings", mode === "remote"]] as const) {
@@ -209,6 +213,7 @@ const chatController = setupChat(closeChat, message => hud(message, 5000), {
   },
 });
 async function syncWritingChat() {
+  if (!chatEnabled) return true;
   const selected = writeNotebook.value;
   if (selected === chatNotebook) return true;
   if (await chatController.open(selected)) { chatNotebook = selected; return true; }
@@ -216,6 +221,7 @@ async function syncWritingChat() {
   return false;
 }
 async function openNotebookChat(notebook: string) {
+  if (!chatEnabled) { hud("Chat is off. Switch it on in Settings.", 5000); return; }
   if (notebook === "*") { hud("Choose a notebook or Inbox to chat."); return; }
   if (notebook !== chatNotebook && !await chatController.open(notebook)) return;
   chatNotebook = notebook;
@@ -226,6 +232,16 @@ async function openNotebookChat(notebook: string) {
   el<HTMLButtonElement>("write-chat").setAttribute("aria-expanded", "true");
   show("write");
   if (!compactLayout.matches) el<HTMLTextAreaElement>("chat-input").focus();
+}
+function applyChatEnabled(enabled: boolean) {
+  chatEnabled = enabled;
+  el<HTMLInputElement>("chat-enabled").checked = enabled;
+  el<HTMLElement>("chat-enabled-status").textContent = enabled
+    ? "Chat is on. Open it from the Chat button while writing."
+    : "Chat is off. Conversations already saved in your notebooks are kept.";
+  // Leaving chat on screen after it is switched off would keep a pane nothing can close.
+  if (!enabled) closeChat();
+  else updateNavigation();
 }
 const win = getCurrentWindow();
 
@@ -785,7 +801,7 @@ function renderPicker() {
 
   pickerNotebook.disabled = !!linkFor;
   el<HTMLButtonElement>("picker-new-notebook").hidden = !!linkFor;
-  el<HTMLButtonElement>("picker-chat").hidden = !!linkFor;
+  el<HTMLButtonElement>("picker-chat").hidden = !chatEnabled || !!linkFor;
   if (linkFor) pool = pool.filter((e) => e.path !== linkFor);
   else if (pickerNotebook.value !== "*") pool = pool.filter(e => (e.notebook || "") === pickerNotebook.value);
 
@@ -1150,6 +1166,17 @@ el<HTMLButtonElement>("nav-write").addEventListener("click", focusWriting);
 el<HTMLButtonElement>("nav-chat").addEventListener("click", () => openNotebookChat(writeNotebook.value));
 el<HTMLButtonElement>("nav-pages").addEventListener("click", () => { linkFor = null; void openPicker(); });
 el<HTMLButtonElement>("nav-settings").addEventListener("click", openRemote);
+el<HTMLInputElement>("chat-enabled").addEventListener("change", async () => {
+  const box = el<HTMLInputElement>("chat-enabled");
+  const wanted = box.checked;
+  box.disabled = true;
+  try {
+    applyChatEnabled(await invoke<boolean>("set_chat_enabled", { enabled: wanted }));
+  } catch (e) {
+    applyChatEnabled(chatEnabled);
+    hud(String(e), 5000);
+  } finally { box.disabled = false; }
+});
 el<HTMLButtonElement>("write-save").addEventListener("click", commit);
 el<HTMLButtonElement>("picker-chat").addEventListener("click", () => openNotebookChat(pickerNotebook.value));
 
@@ -1218,6 +1245,12 @@ async function boot() {
   if (!vault) {
     show("setup");
     return;
+  }
+
+  try {
+    applyChatEnabled(await invoke<boolean>("get_chat_enabled"));
+  } catch {
+    /* chat stays off */
   }
 
   try {

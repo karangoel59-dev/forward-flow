@@ -208,6 +208,7 @@ test('failed move keeps the current entry and restores its notebook selection', 
 test('opening notebook chat keeps editor visible and retains its draft', async () => {
   const opened = [];
   const app = frontend(async command => command === 'list_notebooks' ? ['Ideas'] : null, async notebook => { opened.push(notebook); return true; });
+  app.run('applyChatEnabled(true)');
   app.editor.value = 'Keep writing here';
   await app.run('openNotebookChat("Ideas")');
   assert.deepEqual(opened, ['Ideas']);
@@ -221,6 +222,7 @@ test('opening notebook chat keeps editor visible and retains its draft', async (
 test('rejected chat notebook switch restores editor notebook selection', async () => {
   let allow = true;
   const app = frontend(async () => null, async () => allow);
+  app.run('applyChatEnabled(true)');
   await app.run('openNotebookChat("Ideas")');
   allow = false;
   app.element('write-notebook').value = 'Work';
@@ -229,9 +231,34 @@ test('rejected chat notebook switch restores editor notebook selection', async (
   assert.equal(app.run('chatNotebook'), 'Ideas');
 });
 
+test('chat is off until this device switches it on, leaving write, pages and settings', async () => {
+  const opened = [];
+  const app = frontend(async () => null, async notebook => { opened.push(notebook); return true; });
+  app.run('show("write")');
+  assert.equal(app.run('chatEnabled'), false);
+  assert.equal(app.element('chat').hidden, true);
+  assert.equal(app.element('nav-chat').hidden, true);
+  assert.equal(app.element('write-chat').hidden, true);
+  await app.run('openNotebookChat("Ideas")');
+  assert.deepEqual(opened, [], 'a disabled chat must never open a conversation');
+  assert.equal(await app.run('syncWritingChat()'), true, 'switching notebooks still works without chat');
+
+  app.run('applyChatEnabled(true)');
+  assert.equal(app.element('nav-chat').hidden, false);
+  assert.equal(app.element('write-chat').hidden, false);
+  await app.run('openNotebookChat("Ideas")');
+  assert.deepEqual(opened, ['Ideas']);
+  assert.equal(app.element('chat').hidden, false);
+
+  app.run('applyChatEnabled(false)');
+  assert.equal(app.element('chat').hidden, true, 'switching chat off must close the pane');
+  assert.equal(app.run('workspacePane'), 'write');
+});
+
 test('mobile navigation shows one workspace and keeps editor and conversation when switching',async()=>{
   const opened=[];
   const app=frontend(async()=>null,async notebook=>{opened.push(notebook);return true;},true);
+  app.run('applyChatEnabled(true)');
   app.editor.value='My unsaved draft';
   app.run('show("write")');
   assert.equal(app.element('chat').hidden,true);
