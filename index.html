@@ -31,10 +31,10 @@
         <span class="eyebrow">A little further, every day.</span>
       </header>
       <div class="workspace-toolbar">
-        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button" aria-label="Create a notebook">+ New</button><button id="write-chat" class="text-button" type="button" aria-expanded="true" aria-controls="chat">Chat ↗</button></div>
+        <div class="notebook-controls"><label for="write-notebook" class="hint">Notebook</label><select id="write-notebook"><option value="">Inbox</option></select><button id="write-new-notebook" class="text-button" type="button" aria-label="Create a notebook">+ New</button><button id="write-chat" class="text-button" type="button" aria-expanded="false" aria-controls="chat" hidden>Chat ↗</button></div>
         <button id="write-save" class="ghost-btn" type="button">Save page <span aria-hidden="true">↗</span></button>
       </div>
-      <div id="writing-workspace" class="writing-workspace">
+      <div id="writing-workspace" class="writing-workspace chat-hidden">
       <section id="writing-pane" class="writing-pane" aria-label="Entry editor">
       <div class="writing-label"><span class="eyebrow">THE NEXT PAGE</span><button id="write-clear" class="text-button" type="button" hidden>Clear draft</button></div>
       <textarea
@@ -49,7 +49,7 @@
 
       <p class="writing-note">Write freely. Commit when you’re ready. Then begin again.</p>
       </section>
-    <aside id="chat" class="chat-panel" aria-label="Notebook chat">
+    <aside id="chat" class="chat-panel" aria-label="Notebook chat" hidden>
       <div class="chat-inner">
         <div class="view-title"><div><span class="eyebrow">THINK WITH YOUR NOTEBOOK</span><h1 id="chat-title"></h1></div><div class="chat-header-actions"><button id="chat-history" class="text-button" type="button">History</button><button id="chat-options" class="text-button" type="button" aria-expanded="false" aria-controls="chat-options-panel">Options</button><button id="chat-stop" class="text-button" type="button" aria-label="Stop or end chat">End chat</button><button id="chat-close" class="text-button" type="button">Hide chat</button></div></div>
         <details id="chat-options-panel" class="chat-settings"><summary>Purpose & connections</summary>
@@ -159,7 +159,7 @@
       <div class="picker-inner">
         <div class="view-title"><div><span class="eyebrow">YOUR WORDS, KEPT</span><h1>Collected pages<span class="brand-dot">.</span></h1></div><button class="text-button" id="picker-close" type="button">Back to writing ↗</button></div>
         <p id="archive-count" class="hint"></p>
-        <div class="notebook-controls"><label for="picker-notebook" class="hint">Notebook</label><select id="picker-notebook"><option value="*">All pages</option><option value="">Inbox</option></select><button id="picker-new-notebook" class="text-button" type="button">+ New notebook</button><button id="picker-chat" class="text-button" type="button">Chat ↗</button></div>
+        <div class="notebook-controls"><label for="picker-notebook" class="hint">Notebook</label><select id="picker-notebook"><option value="*">All pages</option><option value="">Inbox</option></select><button id="picker-new-notebook" class="text-button" type="button">+ New notebook</button><button id="picker-chat" class="text-button" type="button" hidden>Chat ↗</button></div>
         <div id="picker-head" class="picker-head hint" hidden></div>
         <input
           id="picker-filter"
@@ -205,6 +205,13 @@
           A GitHub personal access token works as the password — create one at
           github.com/settings/tokens with the “repo” scope.
         </p>
+        <details class="chat-details config-settings"><summary>Notebook chat</summary>
+          <div class="config-settings-content">
+          <p class="hint">Chat is off by default, so writing, pages and settings are all this app shows. Switching it on adds a Chat pane and its own provider, MCP and auto-approve settings. Applies on this device.</p>
+          <label class="hint config-secrets-option"><input id="chat-enabled" type="checkbox" /> Enable notebook chat</label>
+          <p id="chat-enabled-status" class="hint" role="status" aria-live="polite"></p>
+          </div>
+        </details>
         <details class="chat-details config-settings"><summary>Portable setup config</summary>
           <div class="config-settings-content">
           <p class="hint">One JSON file for model connections, MCP servers, and Git settings. Import before choosing a folder to get started on another device.</p>
@@ -245,7 +252,7 @@
 
     <nav id="workspace-nav" class="workspace-nav" aria-label="Workspace navigation">
       <button id="nav-write" type="button" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m16 3 5 5-12 12H4v-5Z"/><path d="m14 5 5 5"/></svg><span>Write</span></button>
-      <button id="nav-chat" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 19 0Z"/></svg><span>Chat</span><span id="nav-chat-count" class="nav-badge" hidden></span></button>
+      <button id="nav-chat" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M21 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 19 0Z"/></svg><span>Chat</span><span id="nav-chat-count" class="nav-badge" hidden></span></button>
       <button id="nav-pages" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 3h14v18H5Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Pages</span></button>
       <button id="nav-settings" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--paper)"/><circle cx="15" cy="12" r="2" fill="var(--paper)"/><circle cx="10" cy="18" r="2" fill="var(--paper)"/></svg><span>Settings</span></button>
     </nav>

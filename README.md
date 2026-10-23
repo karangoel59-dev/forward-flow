@@ -63,7 +63,14 @@ keep their Markdown source; rendering never rewrites your prose.
 
 ## Chat with a notebook
 
-Choose a notebook (or Inbox) and use **Chat**. Set its **Notebook purpose** to
+Chat is off by default, so the app shows only **Write**, **Pages**, and
+**Settings**. Switch on **Enable notebook chat** under **Notebook chat** in
+Settings to add the Chat pane and its own provider, MCP, and auto-approve
+settings. The choice is saved for this device only and never travels in an
+exported config. Switching chat off hides the pane and keeps conversations
+already saved in your notebooks.
+
+Once chat is on, choose a notebook (or Inbox) and use **Chat**. Set its **Notebook purpose** to
 shape the assistant’s goals and style. Connect Gemini, Claude, or OpenAI under
 **AI connections** using your API key and an available model ID. Named connections keep their own endpoint, API key, current model, and saved
 model list. You can switch connections and models between turns.
@@ -233,8 +240,8 @@ with owner-only permissions on Unix. Tokens stay outside Git and are not sent
 as tool definitions or LLM credentials. Tokens are stored locally without
 keychain encryption. On Android, localhost refers to the phone itself.
 
-On phones, **Write**, **Chat**, **Pages**, and **Settings** navigation keeps one
-workspace visible at a time. Switching between writing and chat preserves your
+On phones, **Write**, **Pages**, and **Settings** navigation keeps one
+workspace visible at a time, with **Chat** added when it is switched on. Switching between writing and chat preserves your
 draft and conversation. Desktop keeps the editor and chat side by side. Chat
 **History** opens previous conversations; **Options** holds purpose and connection
 settings.
